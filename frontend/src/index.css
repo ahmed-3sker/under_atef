@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root{
-  --stem-navy : #1c1a3c
+  --stem-navy : #1c1a3c;
   --stem-navy:        #1c1a3c;
   --stem-navy-light:  #35335a;
   --stem-navy-dark:   #12112a;
