@@ -5,12 +5,14 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ProtectedRoute from "./components/protected_route";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
+import { AuthProvider } from "./pages/auth_provider";
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/pages/Login.tsx" element={<Login />} />
 
           {/* Any Logged in batatis */}
           <Route element={<ProtectedRoute />}>
