@@ -19,28 +19,28 @@ createRoot(document.getElementById("root")!).render(
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/pages/Login.tsx" element={<Login />} />
+          <Route path="/Login" element={<Login />} />
 
           {/* Any Logged in batatis */}
 
           <Route element={<ProtectedRoute />}>
-          <Route path="/pages/home.tsx" element={<Home />} />
-          <Route path="/pages/Class_list.tsx" element={<ClassesList />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/Classes" element={<ClassesList />} />
             
 
             {/* Atef & Admins */}
 
 
             <Route element={<ProtectedRoute roles={["principal", "admin"]} />}>
-              <Route path="/pages/dashboard.tsx" element={<Dashboard />} />
-              <Route path="/pages/reports.tsx" element={<Reports />} />
+              <Route path="/Dashboard" element={<Dashboard />} />
+              <Route path="/Reports" element={<Reports />} />
             </Route>
 
             {/* Teachers */}
 
             <Route element={<ProtectedRoute roles={["teacher"]} />}>
-              <Route path="/pages/attendance.tsx" element={<ClassesList />} />
-              <Route path="/pages/attendance/:classId" element={<Attendance />} />
+              <Route path="/Attendance" element={<ClassesList />} />
+              <Route path="/Attendance/:classId" element={<Attendance />} />
             </Route>
 
             {/* teachers and admins */}
