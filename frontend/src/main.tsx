@@ -13,7 +13,7 @@ createRoot(document.getElementById("root")!).render(
       <BrowserRouter>
         <Routes>
           <Route path="/pages/Login.tsx" element={<Login />} />
-\
+
           {/* Any Logged in batatis */}
 
           {/* <Route element={<ProtectedRoute />}>
@@ -50,7 +50,6 @@ createRoot(document.getElementById("root")!).render(
             </Route>
           </Route> */}
 
-          <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
