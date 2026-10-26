@@ -45,7 +45,6 @@ createRoot(document.getElementById("root")!).render(
             {/* hazoro & asker only */}
 
             {/* <Route element={<ProtectedRoute roles={["admin"]} />}>
-              <Route path="/classes" element={<Classes />} />
               <Route path="/users" element={<Users />} />
             </Route>
           </Route> */}

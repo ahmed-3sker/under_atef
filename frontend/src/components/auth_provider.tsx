@@ -1,31 +1,10 @@
-import { createContext, useContext, useEffect, useState } from "react";
-
-import apiRequest from "####";
+import axios from "axios"
 
 
-
-const AuthContext = createContext(null);
-
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-
-  const { setIsLoading } = useLoader();
-
-  const checkAuth = async () => {
-    
-  };
-
-  useEffect(() => {
-    checkAuth();
-  }, []);
-
+const AuthProvider = () => {
   return (
-    <AuthContext.Provider>
-      {children}
-    </AuthContext.Provider>
-  );
+    <div>AuthProvider</div>
+  )
 }
 
-export function useAuth() {
-  return useContext(AuthContext);
-}
+export default AuthProvider
