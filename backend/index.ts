@@ -1,3 +1,5 @@
+import dns from "node:dns";
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 import "dotenv/config";
 import mongoose, { mongo } from "mongoose";
 import cors from "cors";
@@ -9,6 +11,7 @@ import express, {
 import helmet from "helmet";
 import morgan from "morgan";
 import http from "http";
+import authRoutes from "./routes/auth"
 
 const app = express();
 

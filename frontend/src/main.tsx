@@ -32,8 +32,8 @@ createRoot(document.getElementById("root")!).render(
 
 
             <Route element={<ProtectedRoute roles={["principal", "admin"]} />}>
-              <Route path="/Dashboard" element={<Dashboard />} />
-              <Route path="/Reports" element={<Reports />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/reports" element={<Reports />} />
             </Route>
 
             {/* Teachers */}
