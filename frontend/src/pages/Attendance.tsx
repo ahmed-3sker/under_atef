@@ -83,7 +83,16 @@ export default function Attendance() {
     setAttendance(allStudents);
     setSavedMessage("");
   }
+  const STATUSES: Status[] = ["Present", "Absent", "Excused"];
 
+  function statusStyle(status: Status, selected: boolean) {
+    const styles: Record<Status, [string, string]> = {
+      Present: ["bg-green-600 text-white", "border border-green-200 text-green-700 hover:bg-green-50"],
+      Absent: ["bg-red-600 text-white", "border border-red-200 text-red-700 hover:bg-red-50"],
+      Excused: ["bg-blue-600 text-white", "border border-blue-200 text-blue-700 hover:bg-blue-50"],
+    };
+    return styles[status][selected ? 0 : 1];
+  }
   function saveAttendance() {
     try {
       localStorage.setItem(storageKey, JSON.stringify(attendance));
@@ -247,60 +256,65 @@ export default function Attendance() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[650px] text-left">
+            {/* Mobile: cards */}
+            <div className="divide-y divide-slate-100 md:hidden">
+              {students.map((student) => (
+                <div key={student.id} className="p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="font-medium text-slate-900">{student.name}</p>
+                    <span className="text-sm text-slate-500">ID {student.id}</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {STATUSES.map((status) => (
+                      <button
+                        key={status}
+                        onClick={() => markStudent(student.id, status)}
+                        aria-pressed={attendance[student.id] === status}
+                        className={`rounded-lg px-2 py-2.5 text-sm font-semibold transition ${statusStyle(
+                          status,
+                          attendance[student.id] === status
+                        )}`}
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop: table */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-left">
                 <thead className="bg-slate-50 text-sm text-slate-600">
                   <tr>
                     <th className="px-5 py-4">ID</th>
                     <th className="px-5 py-4">Student</th>
-                    <th className=" flex justify-end px-22.5 py-4">Attendance Status</th>
+                    <th className="px-5 py-4 text-right">Attendance Status</th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
                   {students.map((student) => (
                     <tr key={student.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-4 text-slate-500">
-                        {student.id}
-                      </td>
-
-                      <td className="px-5 py-4 font-medium text-slate-900">
-                        {student.name}
-                      </td>
-
-                      <td className="px-5 py-4 flex justify-end">
-                        <div className="flex flex-wrap gap-4">
-                          {(["Present", "Absent", "Excused"] as Status[]).map(
-                            (status) => {
-                              const selected =
-                                attendance[student.id] === status;
-
-                              const styles: Record<Status, string> = {
-                                Present: selected
-                                  ? "bg-green-600 text-white"
-                                  : "border border-green-200 text-green-700 hover:bg-green-50",
-                                Absent: selected
-                                  ? "bg-red-600 text-white"
-                                  : "border border-red-200 text-red-700 hover:bg-red-50",
-                                Excused: selected
-                                  ? "bg-blue-600 text-white"
-                                  : "border border-blue-200 text-blue-700 hover:bg-blue-50",
-                              };
-
-                              return (
-                                <button
-                                  key={status}
-                                  onClick={() =>
-                                    markStudent(student.id, status)
-                                  }
-                                  aria-pressed={selected}
-                                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${styles[status]}`}
-                                >
-                                  {status}
-                                </button>
-                              );
-                            }
-                          )}
+                      <td className="px-5 py-4 text-slate-500">{student.id}</td>
+                      <td className="px-5 py-4 font-medium text-slate-900">{student.name}</td>
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end gap-3">
+                          {STATUSES.map((status) => (
+                            <button
+                              key={status}
+                              onClick={() => markStudent(student.id, status)}
+                              aria-pressed={attendance[student.id] === status}
+                              className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${statusStyle(
+                                status,
+                                attendance[student.id] === status
+                              )}`}
+                            >
+                              {status}
+                            </button>
+                          ))}
                         </div>
                       </td>
                     </tr>
