@@ -19,6 +19,11 @@ createRoot(document.getElementById("root")!).render(
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+
+            {/* <Route element={<ProtectedRoute roles=["idk"] />} /> */}
+              <Route path="/attendance" element={<ClassesList />} />
+              <Route path="/attendance/:classId" element={<Attendance />} />
+            {/* </Route> */}
           <Route path="/Login" element={<Login />} />
 
           {/* Any Logged in batatis */}
@@ -37,11 +42,6 @@ createRoot(document.getElementById("root")!).render(
             </Route>
 
             {/* Teachers */}
-
-            <Route element={<ProtectedRoute roles={["teacher"]} />}>
-              <Route path="/Attendance" element={<ClassesList />} />
-              <Route path="/Attendance/:classId" element={<Attendance />} />
-            </Route>
 
             {/* teachers and admins */}
 

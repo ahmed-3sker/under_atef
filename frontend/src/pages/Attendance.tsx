@@ -4,7 +4,7 @@ import stemIcon from "../assets/stem_icon.png";
 
 const SCHOOL_NAME = "STEM 6th of October";
 const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
-type Status = "Present" | "Absent" | "Late";
+type Status = "Present" | "Absent" | "Excused";
 
 type Student = {
   id: number;
@@ -103,12 +103,12 @@ export default function Attendance() {
     (student) => attendance[student.id] === "Absent"
   ).length;
 
-  const lateCount = students.filter(
-    (student) => attendance[student.id] === "Late"
+  const excusedCount = students.filter(
+    (student) => attendance[student.id] === "Excused"
   ).length;
 
   const unmarkedCount =
-    students.length - presentCount - absentCount - lateCount;
+    students.length - presentCount - absentCount - excusedCount;
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-100">
@@ -151,10 +151,6 @@ export default function Attendance() {
               <h1 className="mt-2 text-3xl font-bold text-slate-900">
                 Class {className.toUpperCase()}
               </h1>
-
-              <p className="mt-2 text-slate-600">
-                Record attendance for each session and date.
-              </p>
             </div>
 
             <div className="rounded-xl bg-white px-5 py-3 shadow-sm">
@@ -213,7 +209,7 @@ export default function Attendance() {
             {[
               { label: "Present", count: presentCount, color: "text-green-700 bg-green-50" },
               { label: "Absent", count: absentCount, color: "text-red-700 bg-red-50" },
-              { label: "Late", count: lateCount, color: "text-amber-700 bg-amber-50" },
+              { label: "Excused", count: excusedCount, color: "text-blue-700 bg-blue-50" },
               { label: "Unmarked", count: unmarkedCount, color: "text-slate-700 bg-slate-200" },
             ].map((item) => (
               <div key={item.label} className={`rounded-xl p-4 ${item.color}`}>
@@ -255,9 +251,9 @@ export default function Attendance() {
               <table className="w-full min-w-[650px] text-left">
                 <thead className="bg-slate-50 text-sm text-slate-600">
                   <tr>
-                    <th className="px-5 py-4">#</th>
+                    <th className="px-5 py-4">ID</th>
                     <th className="px-5 py-4">Student</th>
-                    <th className="px-5 py-4">Attendance Status</th>
+                    <th className=" flex justify-end px-22.5 py-4">Attendance Status</th>
                   </tr>
                 </thead>
 
@@ -272,9 +268,9 @@ export default function Attendance() {
                         {student.name}
                       </td>
 
-                      <td className="px-5 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          {(["Present", "Absent", "Late"] as Status[]).map(
+                      <td className="px-5 py-4 flex justify-end">
+                        <div className="flex flex-wrap gap-4">
+                          {(["Present", "Absent", "Excused"] as Status[]).map(
                             (status) => {
                               const selected =
                                 attendance[student.id] === status;
@@ -286,9 +282,9 @@ export default function Attendance() {
                                 Absent: selected
                                   ? "bg-red-600 text-white"
                                   : "border border-red-200 text-red-700 hover:bg-red-50",
-                                Late: selected
-                                  ? "bg-amber-500 text-white"
-                                  : "border border-amber-200 text-amber-700 hover:bg-amber-50",
+                                Excused: selected
+                                  ? "bg-blue-600 text-white"
+                                  : "border border-blue-200 text-blue-700 hover:bg-blue-50",
                               };
 
                               return (
@@ -366,7 +362,7 @@ export default function Attendance() {
                 Phone
               </a>
 
-              <a href="/reports">reports</a>
+              
 
               <a href="/classes">classes</a>
             </div>

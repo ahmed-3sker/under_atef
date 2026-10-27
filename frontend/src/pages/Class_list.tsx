@@ -102,9 +102,6 @@ export default function ClassList() {
                   Phone
                 </a>
 
-                <a href="../reports" >
-                  reports
-                </a>
 
                 <a href="../classes">
                   classes
