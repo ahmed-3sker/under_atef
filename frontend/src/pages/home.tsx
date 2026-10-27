@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useAuth, type Role } from "../components/auth_provider";
-import RoleBadge from "../components/Rolebadge";
+import RoleBadge from "../components/RoleBadge";
 
 const links: { to: string; label: string; roles: Role[] }[] = [
   { to: "/dashboard",  label: "Dashboard",  roles: ["admin", "principal"] },
@@ -10,6 +10,8 @@ const links: { to: string; label: string; roles: Role[] }[] = [
   { to: "/reports",    label: "Reports",    roles: ["admin", "principal"] },
   { to: "/classes",    label: "Classes",    roles: ["admin"] },
   { to: "/users",      label: "Users",      roles: ["admin"] },
+   { to: "/attendance",      label: "Attendance",      roles: ["admin"] }
+  
 ];
 
 export default function Home() {

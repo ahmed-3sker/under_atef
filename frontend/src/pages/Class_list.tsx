@@ -54,7 +54,7 @@ export default function ClassList() {
                 <button
                   key={className}
                   onClick={() =>
-                    window.location.href = `/attendance`
+                   navigate(`/attendance/${className.toLowerCase()}`)
                   }
                   className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm transition hover:-translate-y-1 hover:border-[#1a1a4e] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#1a1a4e]"
                 >
