@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../components/auth_provider";
-import { a } from "motion/react-client";
 import stemIcon from "../assets/stem_icon.png";
 
 const SCHOOL_NAME = "STEM 6th of October";

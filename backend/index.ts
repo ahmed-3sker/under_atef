@@ -1,7 +1,7 @@
 import dns from "node:dns";
 dns.setServers(["8.8.8.8", "1.1.1.1"]);
 import "dotenv/config";
-import mongoose, { mongo } from "mongoose";
+import mongoose from "mongoose";
 import cors from "cors";
 import express, {
   type NextFunction,
@@ -13,12 +13,12 @@ import morgan from "morgan";
 import http from "http";
 import authRoutes from "./routes/auth"
 
-const app = express();
+const app = express(); // Initialize app
 
-app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL }));
-app.use(express.json());
-app.use(morgan("dev"));
+app.use(helmet()); // Automatic Security Headers
+app.use(cors({ origin: process.env.CLIENT_URL })); // Only accept localhost for now
+app.use(express.json()); // Use json :P
+app.use(morgan("dev")); //  Get live http requests 
 
 // Check api updown status
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
