@@ -8,20 +8,22 @@ const userSchema = new Schema(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
       trim: true,
     },
-    passwordHash: { type: String, required: true },
+    passwordHash: { type: String, required: true, select: false },
     role: {
       type: String,
       enum: ["admin", "teacher", "principal"],
+      required: true,
     },
     isActive: { type: Boolean, default: true },
   },
   {
     timestamps: true,
     methods: {
-      comparePassword: (text: string) => {
-        return bcrypt.compare(text, this?.passwordHash); // Js ignore the never type :sob:
+      comparePassword(text: string) {
+        return bcrypt.compare(text, this.passwordHash);
       },
     },
   },
