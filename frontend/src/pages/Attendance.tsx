@@ -256,7 +256,7 @@ export default function Attendance() {
               </div>
             </div>
 
-            {/* Mobile: cards */}
+           
             <div className="divide-y divide-slate-100 md:hidden">
               {students.map((student) => (
                 <div key={student.id} className="p-4">
@@ -284,7 +284,7 @@ export default function Attendance() {
               ))}
             </div>
 
-            {/* Desktop: table */}
+            
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-left">
                 <thead className="bg-slate-50 text-sm text-slate-600">
