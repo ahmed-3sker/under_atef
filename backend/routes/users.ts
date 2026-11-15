@@ -2,7 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import User from "../models/user";
 import { authenticate, authorize } from "../middleware/auth";
-import { validId, wrap } from "../utils/helpers";
+import { validId, wrap } from "../utils/tools";
 
 const router = Router();
 const ROLES = ["admin", "staff", "teacher"];

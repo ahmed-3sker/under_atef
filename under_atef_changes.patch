@@ -1,0 +1,4648 @@
+From 58e6f767a6d24909025a7d5c4657b3139be7a905 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 14:49:43 +0000
+Subject: [PATCH] Finish app: fix backend, add routes/seed, wire frontend to
+ API
+
+---
+ README.md                                 |  57 ++
+ backend/.env.example                      |  10 +
+ backend/index.ts                          |  59 +-
+ backend/models/class.ts                   |  16 +-
+ backend/models/report.ts                  |  21 +-
+ backend/models/student.ts                 |  32 +-
+ backend/package-lock.json                 |  29 +
+ backend/package.json                      |   6 +-
+ backend/routes/auth.ts                    |  12 +-
+ backend/routes/classes.ts                 |  35 ++
+ backend/routes/report.ts                  |  52 --
+ backend/routes/reports.ts                 |  63 ++
+ backend/routes/students.ts                |  96 +++
+ backend/routes/users.ts                   |   4 +-
+ backend/scripts/seed.ts                   |  62 ++
+ backend/services/submit_report.ts         |  60 ++
+ backend/tsconfig.json                     |  14 +
+ backend/utils/{tools.ts => helpers.ts}    |  16 +-
+ frontend/.env.example                     |   1 +
+ frontend/package-lock.json                |  54 --
+ frontend/src/App.css                      | 184 ------
+ frontend/src/App.tsx                      |   6 -
+ frontend/src/api/auth.ts                  |   0
+ frontend/src/api/base.ts                  |  36 +-
+ frontend/src/api/endpoints.ts             |  53 ++
+ frontend/src/api/types.ts                 |  47 ++
+ frontend/src/components/Layout.tsx        |  96 +++
+ frontend/src/components/auth_provider.tsx |   8 +-
+ frontend/src/lib/attendance.ts            | 102 +++
+ frontend/src/lib/nav.ts                   |   9 +
+ frontend/src/lib/use_fetch.ts             |  36 ++
+ frontend/src/main.tsx                     |  54 +-
+ frontend/src/pages/Attendance.tsx         | 549 +++++------------
+ frontend/src/pages/Class_list.tsx         | 172 +-----
+ frontend/src/pages/Login.tsx              | 181 +-----
+ frontend/src/pages/NotFound.tsx           |  24 +-
+ frontend/src/pages/Students.tsx           | 139 +++++
+ frontend/src/pages/Users.tsx              | 107 ++++
+ frontend/src/pages/dashboard.tsx          |  58 +-
+ frontend/src/pages/home.tsx               |  57 +-
+ frontend/src/pages/reports.tsx            | 719 +++++-----------------
+ frontend/src/pages/student_dashboard.tsx  | 518 +++++-----------
+ 42 files changed, 1765 insertions(+), 2089 deletions(-)
+ create mode 100644 README.md
+ create mode 100644 backend/.env.example
+ create mode 100644 backend/routes/classes.ts
+ delete mode 100644 backend/routes/report.ts
+ create mode 100644 backend/routes/reports.ts
+ create mode 100644 backend/routes/students.ts
+ create mode 100644 backend/scripts/seed.ts
+ create mode 100644 backend/services/submit_report.ts
+ create mode 100644 backend/tsconfig.json
+ rename backend/utils/{tools.ts => helpers.ts} (65%)
+ create mode 100644 frontend/.env.example
+ delete mode 100644 frontend/src/App.css
+ delete mode 100644 frontend/src/App.tsx
+ delete mode 100644 frontend/src/api/auth.ts
+ create mode 100644 frontend/src/api/endpoints.ts
+ create mode 100644 frontend/src/api/types.ts
+ create mode 100644 frontend/src/components/Layout.tsx
+ create mode 100644 frontend/src/lib/attendance.ts
+ create mode 100644 frontend/src/lib/nav.ts
+ create mode 100644 frontend/src/lib/use_fetch.ts
+ create mode 100644 frontend/src/pages/Students.tsx
+ create mode 100644 frontend/src/pages/Users.tsx
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..c55df2d
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,57 @@
++# Under Atef: Attendance Tracker
++
++Attendance tracking for STEM 6th of October. Teachers take attendance per class, per day, per session (1 to 5).
++Principal and admin read reports. Admin manages users, classes and students.
++
++## Setup
++
++```bash
++npm install                      # root (concurrently)
++npm install --prefix backend
++npm install --prefix frontend
++
++cp backend/.env.example backend/.env     # fill in MONGO_URI, JWT_SECRET, admin email/password
++cp frontend/.env.example frontend/.env   # only needed if the API isn't on localhost:5000
++
++npm run seed --prefix backend            # first admin + classes 10A..12F
++npm run seed --prefix backend -- --demo  # same, plus 24 demo students in 10A
++
++npm run dev                              # frontend :5173, backend :5000
++```
++
++## Roles
++
++| Role      | Can do                                                        |
++|-----------|---------------------------------------------------------------|
++| teacher   | Take attendance, browse students                              |
++| principal | Dashboard, reports, browse students                           |
++| admin     | Everything, plus users, students and classes                  |
++
++## API
++
++All routes except `/auth/login` and `/health` need `Authorization: Bearer <token>`.
++
++| Route                              | Who               | Purpose                                      |
++|------------------------------------|-------------------|----------------------------------------------|
++| `POST /auth/login`, `GET /auth/me` | any               | Sign in (rate limited), current user         |
++| `/users`                           | admin             | List, create, update, deactivate users       |
++| `GET /classes`                     | any               | Active classes                               |
++| `POST /classes`, `DELETE /classes/:id` | admin         | Add / deactivate a class                     |
++| `GET /students?class=`             | any               | Roster                                       |
++| `POST /students`, `/students/bulk`, `PATCH`, `DELETE` | admin | Manage students                       |
++| `POST /reports`                    | teacher, admin    | Submit or overwrite one class/date/session   |
++| `GET /reports/class/:id?date&session` | any            | Load one saved report                        |
++| `GET /reports?date=`               | principal, admin  | All reports for a day                        |
++| `GET /reports/dates`               | principal, admin  | Dates that have reports                      |
++| `GET /reports/student/:id`         | any               | One student's history                        |
++
++Dates are `YYYY-MM-DD` (Cairo time). Statuses are `present`, `absent`, `excused`.
++
++## Deploying
++
++- Backend: `npm run build --prefix backend`, then `npm start --prefix backend`. Set the env vars from `.env.example`.
++  If it runs behind a proxy (Render, Railway, Nginx), add `app.set("trust proxy", 1)` in `backend/index.ts`
++  so the login rate limiter sees real client IPs.
++- Frontend: set `VITE_API_URL` to the deployed API URL, run `npm run build --prefix frontend`, serve `frontend/dist`.
++  Configure the host to fall back to `index.html` for unknown paths (single page app).
++- Set `CLIENT_URL` on the backend to the deployed frontend origin, or CORS will block requests.
+diff --git a/backend/.env.example b/backend/.env.example
+new file mode 100644
+index 0000000..578b91b
+--- /dev/null
++++ b/backend/.env.example
+@@ -0,0 +1,10 @@
++MONGO_URI=mongodb+srv://USER:PASSWORD@cluster.mongodb.net/under_atef
++JWT_SECRET=change-me-to-a-long-random-string
++CLIENT_URL=http://localhost:5173
++PORT=5000
++# set to 1 only if your network can't resolve the Atlas SRV record
++FORCE_PUBLIC_DNS=0
++
++# used by `npm run seed`
++SEED_ADMIN_EMAIL=admin@example.com
++SEED_ADMIN_PASSWORD=change-this-password
+diff --git a/backend/index.ts b/backend/index.ts
+index a1580f7..729fddc 100644
+--- a/backend/index.ts
++++ b/backend/index.ts
+@@ -1,49 +1,56 @@
+ import dns from "node:dns";
+-dns.setServers(["8.8.8.8", "1.1.1.1"]);
++// Some networks can't resolve Atlas SRV records. Opt in with FORCE_PUBLIC_DNS=1.
++if (process.env.FORCE_PUBLIC_DNS === "1") dns.setServers(["8.8.8.8", "1.1.1.1"]);
+ import "dotenv/config";
+ import mongoose from "mongoose";
+ import cors from "cors";
+-import express, {
+-  type NextFunction,
+-  type Response,
+-  type Request,
+-} from "express";
++import express, { type NextFunction, type Response, type Request } from "express";
+ import helmet from "helmet";
+ import morgan from "morgan";
+ import http from "http";
+-import authRoutes from "./routes/auth"
++import authRoutes from "./routes/auth";
++import userRoutes from "./routes/users";
++import classRoutes from "./routes/classes";
++import studentRoutes from "./routes/students";
++import reportRoutes from "./routes/reports";
++
++for (const key of ["MONGO_URI", "JWT_SECRET", "CLIENT_URL"]) {
++  if (!process.env[key]) {
++    console.error(`Missing env var ${key}. Copy .env.example to .env and fill it in.`);
++    process.exit(1);
++  }
++}
++
++const app = express();
++
++app.use(helmet());
++app.use(cors({ origin: process.env.CLIENT_URL }));
++app.use(express.json());
++app.use(morgan("dev"));
+ 
+-const app = express(); // Initialize app
+-
+-app.use(helmet()); // Automatic Security Headers
+-app.use(cors({ origin: process.env.CLIENT_URL })); // Only accept localhost for now
+-app.use(express.json()); // Use json :P
+-app.use(morgan("dev")); //  Get live http requests 
+-
+-// Check api updown status
+ app.get("/api/health", (_req, res) => res.json({ ok: true }));
+ 
+-// Add auth routes for usage
+ app.use("/api/auth", authRoutes);
++app.use("/api/users", userRoutes);
++app.use("/api/classes", classRoutes);
++app.use("/api/students", studentRoutes);
++app.use("/api/reports", reportRoutes);
+ 
+-app.use("/api", (_req, res) =>
+-  res.status(404).json({ message: "Route Not Found" }),
+-);
++app.use("/api", (_req, res) => res.status(404).json({ message: "Route Not Found" }));
+ 
+-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
++app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
++  if (err.status) return res.status(err.status).json({ message: err.message });
+   console.error(err);
+-  res.status(500).json({ message: "Uhhh smth broke idk" });
++  res.status(500).json({ message: "Something went wrong" });
+ });
+ 
+ const server = http.createServer(app);
+ 
+ const start = async () => {
+-  await mongoose.connect(process.env.MONGO_URI ?? "");
+-  console.log("MONGO BATATIS CONNECTEDDDD");
++  await mongoose.connect(process.env.MONGO_URI!);
++  console.log("MongoDB connected");
+   const port = Number(process.env.PORT) || 5000;
+-  server.listen(port, () => {
+-    console.log("SERVER RUNNNNING On Port : ", port);
+-  });
++  server.listen(port, () => console.log("Server running on port", port));
+ };
+ 
+ start().catch((err) => {
+diff --git a/backend/models/class.ts b/backend/models/class.ts
+index 77f2005..5d8fa81 100644
+--- a/backend/models/class.ts
++++ b/backend/models/class.ts
+@@ -1,18 +1,14 @@
+ import { Schema, model, type InferSchemaType } from "mongoose";
+ 
+ const classSchema = new Schema({
+-  letter: {
+-    type: String,
+-    enum: ["A", "B", "C", "D", "E", "F"],
+-    required: true,
+-    unique: true,
+-    trim: true,
+-  },
+-  grade: { type: Number, min: 10, max: 12 },
+-  students: { type: Number, min: 10, max: 26, required: true },
++  grade: { type: Number, enum: [10, 11, 12], required: true },
++  letter: { type: String, enum: ["A", "B", "C", "D", "E", "F"], required: true, trim: true },
++  // "10A", "11C" ... built from grade + letter, used in URLs and reports
++  name: { type: String, required: true, unique: true, trim: true },
+   isActive: { type: Boolean, default: true },
+ });
+ 
+-export type ClassType = InferSchemaType<typeof classSchema>;
++classSchema.index({ grade: 1, letter: 1 }, { unique: true });
+ 
++export type ClassType = InferSchemaType<typeof classSchema>;
+ export default model("Class", classSchema);
+diff --git a/backend/models/report.ts b/backend/models/report.ts
+index 1eb0c2c..7bf7e4b 100644
+--- a/backend/models/report.ts
++++ b/backend/models/report.ts
+@@ -1,22 +1,25 @@
+ import { Schema, model, type InferSchemaType } from "mongoose";
+ 
++export const STATUSES = ["present", "absent", "excused"] as const;
++export type Status = (typeof STATUSES)[number];
++export const SESSIONS = [1, 2, 3, 4, 5] as const;
++
+ const recordSchema = new Schema(
+   {
+     student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
+     studentName: { type: String, required: true },
+-    status: {
+-      type: String,
+-      enum: ["present", "absent", "excused"],
+-      required: true,
+-    },
++    studentCode: { type: String, required: true },
++    status: { type: String, enum: STATUSES, required: true },
+   },
+   { _id: false },
+ );
+ 
+ const reportSchema = new Schema(
+   {
++    class: { type: Schema.Types.ObjectId, ref: "Class", required: true },
+     className: { type: String, required: true, trim: true },
+-    date: { type: String, required: true, match: /^\d{2}-\d{2}-\d{4}$/ },
++    date: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
++    session: { type: Number, enum: SESSIONS, required: true },
+     records: [recordSchema],
+     summary: {
+       total: Number,
+@@ -24,13 +27,15 @@ const reportSchema = new Schema(
+       absent: Number,
+       excused: Number,
+     },
++    submittedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+   },
+   { timestamps: true },
+ );
+ 
+-// one report per class per day
+-reportSchema.index({ className: 1, date: 1 }, { unique: true });
++// one report per class per day per session
++reportSchema.index({ class: 1, date: 1, session: 1 }, { unique: true });
+ reportSchema.index({ date: 1 });
++reportSchema.index({ "records.student": 1, date: 1 });
+ 
+ export type ReportType = InferSchemaType<typeof reportSchema>;
+ export default model("Report", reportSchema);
+diff --git a/backend/models/student.ts b/backend/models/student.ts
+index bf183ca..56fa610 100644
+--- a/backend/models/student.ts
++++ b/backend/models/student.ts
+@@ -1,23 +1,19 @@
+ import { Schema, model, type InferSchemaType } from "mongoose";
+ 
+-const STATUSES = ["present","absent","excused"]
+-
+-const entrySchema = new Schema({
+-  date:{type:String,required:true,match:/^\d{2}-\d{2}-\d{4}$/},
+-  status:{type:String,enum:STATUSES,required : true},
+-},{_id:false})
+-
+-const studentSchema = new Schema({
+-  name: { type: String, required: true, trim: true },
+-  studentId: { type: String, required: true, unique: true, trim: true },
+-  class: { type: "", ref: "Class", required: true, index: true },
+-  guardianName: { type: String, trim: true },
+-  guardianPhone: { type: String, trim: true },
+-  guardianEmail: { type: String, lowercase: true, trim: true },
+-  attendance:[entrySchema],
+-  isActive:{type:Boolean,default:true}
+-},{timestamps:true});
++// Attendance is NOT stored here. Reports are the single source of truth,
++// and a student's history is read from them.
++const studentSchema = new Schema(
++  {
++    name: { type: String, required: true, trim: true },
++    studentId: { type: String, required: true, unique: true, trim: true },
++    class: { type: Schema.Types.ObjectId, ref: "Class", required: true, index: true },
++    guardianName: { type: String, trim: true },
++    guardianPhone: { type: String, trim: true },
++    guardianEmail: { type: String, lowercase: true, trim: true },
++    isActive: { type: Boolean, default: true },
++  },
++  { timestamps: true },
++);
+ 
+ export type StudentType = InferSchemaType<typeof studentSchema>;
+-
+ export default model("Student", studentSchema);
+diff --git a/backend/package-lock.json b/backend/package-lock.json
+index 3011b36..cac1f5e 100644
+--- a/backend/package-lock.json
++++ b/backend/package-lock.json
+@@ -14,6 +14,7 @@
+         "dayjs": "^1.11.23",
+         "dotenv": "^18.0.9",
+         "express": "^5.3.0",
++        "express-rate-limit": "^8.7.4",
+         "helmet": "^8.3.0",
+         "jsonwebtoken": "^9.0.3",
+         "mongoose": "^9.11.4",
+@@ -1652,6 +1653,25 @@
+         "url": "https://opencollective.com/express"
+       }
+     },
++    "node_modules/express-rate-limit": {
++      "version": "8.7.4",
++      "resolved": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.7.4.tgz",
++      "integrity": "sha512-LKBXzX700wz3zAGNNmVnjRI5mEbYkLv7UbMI4+9Xa+JPcg2UZh6AgY/2CZh9RrJjFM5ttC/N1lD+KzyFoZITCw==",
++      "license": "MIT",
++      "dependencies": {
++        "debug": "^4.4.3",
++        "ip-address": "^10.2.0"
++      },
++      "engines": {
++        "node": ">= 16"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/express-rate-limit"
++      },
++      "peerDependencies": {
++        "express": ">= 4.11"
++      }
++    },
+     "node_modules/fill-range": {
+       "version": "7.1.1",
+       "resolved": "https://registry.npmjs.org/fill-range/-/fill-range-7.1.1.tgz",
+@@ -1885,6 +1905,15 @@
+       "integrity": "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==",
+       "license": "ISC"
+     },
++    "node_modules/ip-address": {
++      "version": "10.7.6",
++      "resolved": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.6.tgz",
++      "integrity": "sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 12"
++      }
++    },
+     "node_modules/ipaddr.js": {
+       "version": "1.9.1",
+       "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
+diff --git a/backend/package.json b/backend/package.json
+index a7ea2b5..b847a6c 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -5,7 +5,10 @@
+   "main": "index.js",
+   "scripts": {
+     "dev": "tsx watch index.ts",
+-    "test": "echo \"Error: no test specified\" && exit 1"
++    "build": "tsc",
++    "start": "node dist/index.js",
++    "seed": "tsx scripts/seed.ts",
++    "typecheck": "tsc --noEmit"
+   },
+   "keywords": [],
+   "author": "",
+@@ -17,6 +20,7 @@
+     "dayjs": "^1.11.23",
+     "dotenv": "^18.0.9",
+     "express": "^5.3.0",
++    "express-rate-limit": "^8.7.4",
+     "helmet": "^8.3.0",
+     "jsonwebtoken": "^9.0.3",
+     "mongoose": "^9.11.4",
+diff --git a/backend/routes/auth.ts b/backend/routes/auth.ts
+index 8b338d5..9e7004a 100644
+--- a/backend/routes/auth.ts
++++ b/backend/routes/auth.ts
+@@ -1,11 +1,21 @@
+ import { Router } from "express";
+ import jwt from "jsonwebtoken";
+ import User from "../models/user";
++import rateLimit from "express-rate-limit";
+ import { authenticate } from "../middleware/auth";
+ 
+ const router = Router();
+ 
+-router.post("/login", async (req, res) => {
++// 10 login attempts per 15 minutes per IP
++const loginLimiter = rateLimit({
++  windowMs: 15 * 60 * 1000,
++  limit: 10,
++  standardHeaders: true,
++  legacyHeaders: false,
++  message: { message: "Too many login attempts. Try again in 15 minutes." },
++});
++
++router.post("/login", loginLimiter, async (req, res) => {
+   try {
+     const { email, password } = req.body ?? {};
+     if (!email || !password) {
+diff --git a/backend/routes/classes.ts b/backend/routes/classes.ts
+new file mode 100644
+index 0000000..f62e0d6
+--- /dev/null
++++ b/backend/routes/classes.ts
+@@ -0,0 +1,35 @@
++import { Router } from "express";
++import Class from "../models/class";
++import { authenticate, authorize } from "../middleware/auth";
++import { validId, wrap } from "../utils/helpers";
++
++const router = Router();
++router.use(authenticate);
++
++router.get("/", wrap(async (_req, res) => {
++  const classes = await Class.find({ isActive: true }).sort({ grade: 1, letter: 1 });
++  res.json({ classes });
++}));
++
++router.post("/", authorize("admin"), wrap(async (req, res) => {
++  const grade = Number(req.body?.grade);
++  const letter = String(req.body?.letter ?? "").toUpperCase();
++  if (![10, 11, 12].includes(grade) || !/^[A-F]$/.test(letter)) {
++    return res.status(400).json({ message: "grade must be 10-12 and letter A-F" });
++  }
++  try {
++    const cls = await Class.create({ grade, letter: letter as "A", name: `${grade}${letter}` });
++    res.status(201).json({ class: cls });
++  } catch (err: any) {
++    if (err.code === 11000) return res.status(409).json({ message: "Class already exists" });
++    throw err;
++  }
++}));
++
++router.delete("/:id", authorize("admin"), validId, wrap(async (req, res) => {
++  const cls = await Class.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: "after" });
++  if (!cls) return res.status(404).json({ message: "Class not found" });
++  res.json({ class: cls });
++}));
++
++export default router;
+diff --git a/backend/routes/report.ts b/backend/routes/report.ts
+deleted file mode 100644
+index 90a5ac1..0000000
+--- a/backend/routes/report.ts
++++ /dev/null
+@@ -1,52 +0,0 @@
+-// services/submit_report.ts
+-import Report from "../models/report";
+-import Student from "../models/student";
+-
+-type Status = "present" | "absent" | "late" | "excused";
+-
+-export async function submitReport(
+-  classId: string,
+-  date: string,
+-  userId: string,
+-  records: { studentId: string; status: Status; note?: string }[],
+-) {
+-    // Array of IDs only
+-    const ids = records.map((r) => r.studentId);
+-
+-    const count = await Student.countDocuments({ _id: { $in: ids }, class: classId });
+-  if (count !== new Set(ids).size) {
+-    throw Object.assign(new Error("Some students don't belong to this class"), { status: 400 });
+-  }
+-
+-  // Get summary of each status
+-  const summary = { total: records.length, present: 0, absent: 0, late: 0, excused: 0 };
+-  records.forEach((r) => summary[r.status]++);
+-
+-  // Update Report
+-  const report = await Report.findOneAndUpdate(
+-    { class: classId, date },
+-    {
+-      class: classId,
+-      date,
+-      summary,
+-      submittedBy: userId,
+-      records: records.map((r) => ({ student: r.studentId, status: r.status, note: r.note ?? "" })),
+-    },
+-    { upsert: true, new: true },
+-  );
+-
+-  // Update Student Report
+-  await Student.bulkWrite(
+-    records.flatMap((r) => [
+-      { updateOne: { filter: { _id: r.studentId }, update: { $pull: { attendance: { date } } } } },
+-      {
+-        updateOne: {
+-          filter: { _id: r.studentId },
+-          update: { $push: { attendance: { date, status: r.status, note: r.note ?? "", markedBy: userId } } },
+-        },
+-      },
+-    ]),
+-  );
+-
+-  return report;
+-}
+\ No newline at end of file
+diff --git a/backend/routes/reports.ts b/backend/routes/reports.ts
+new file mode 100644
+index 0000000..3ede2ac
+--- /dev/null
++++ b/backend/routes/reports.ts
+@@ -0,0 +1,63 @@
++import { Router } from "express";
++import mongoose from "mongoose";
++import Report from "../models/report";
++import { authenticate, authorize } from "../middleware/auth";
++import { submitReport } from "../services/submit_report";
++import { isValidDate, validId, wrap } from "../utils/helpers";
++
++const router = Router();
++router.use(authenticate);
++
++// Teachers and admins submit. Re-submitting the same class/date/session overwrites it.
++router.post("/", authorize("teacher", "admin"), wrap(async (req, res) => {
++  const { classId, date, session, records } = req.body ?? {};
++  const report = await submitReport({
++    classId, date, session: Number(session), records, userId: req.user!.id,
++  });
++  res.status(201).json({ report });
++}));
++
++// One class / date / session. Used by the attendance page to load what's already saved.
++router.get("/class/:id", validId, wrap(async (req, res) => {
++  const { date } = req.query;
++  const session = Number(req.query.session);
++  if (!isValidDate(date) || !session) {
++    return res.status(400).json({ message: "date (YYYY-MM-DD) and session are required" });
++  }
++  const filter: Record<string, unknown> = { class: req.params.id, date, session };
++  const report = await Report.findOne(filter);
++  res.json({ report }); // null when nothing is saved yet
++}));
++
++// Everything for one day (all classes, all sessions). Principal + admin only.
++router.get("/", authorize("principal", "admin"), wrap(async (req, res) => {
++  const { date } = req.query;
++  if (!isValidDate(date)) return res.status(400).json({ message: "date must be YYYY-MM-DD" });
++  const reports = await Report.find({ date }).sort({ className: 1, session: 1 });
++  res.json({ reports });
++}));
++
++// Dates that have at least one report, newest first (fills the date dropdown).
++router.get("/dates", authorize("principal", "admin"), wrap(async (_req, res) => {
++  const dates = await Report.distinct("date");
++  res.json({ dates: dates.sort().reverse() });
++}));
++
++// One student's history, grouped by day.
++router.get("/student/:id", validId, wrap(async (req, res) => {
++  const studentId = new mongoose.Types.ObjectId(String(req.params.id));
++  const rows = await Report.find({ "records.student": studentId }, { date: 1, session: 1, records: 1 })
++    .sort({ date: 1, session: 1 })
++    .lean();
++
++  const days = new Map<string, Record<number, string>>();
++  for (const row of rows) {
++    const status = row.records.find((r) => r.student.equals(studentId))?.status;
++    if (!status) continue;
++    if (!days.has(row.date)) days.set(row.date, {});
++    days.get(row.date)![row.session] = status;
++  }
++  res.json({ days: Array.from(days, ([date, sessions]) => ({ date, sessions })) });
++}));
++
++export default router;
+diff --git a/backend/routes/students.ts b/backend/routes/students.ts
+new file mode 100644
+index 0000000..9256d17
+--- /dev/null
++++ b/backend/routes/students.ts
+@@ -0,0 +1,96 @@
++import { Router } from "express";
++import Class from "../models/class";
++import Student from "../models/student";
++import { authenticate, authorize } from "../middleware/auth";
++import { pick, validId, wrap } from "../utils/helpers";
++
++const router = Router();
++router.use(authenticate);
++
++// any logged-in user can read (teachers need the roster to take attendance)
++router.get("/", wrap(async (req, res) => {
++  const filter: Record<string, unknown> = { isActive: true };
++  if (req.query.class) filter.class = req.query.class;
++  const students = await Student.find(filter).sort("studentId").populate("class", "name");
++  res.json({ students });
++}));
++
++router.get("/:id", validId, wrap(async (req, res) => {
++  const student = await Student.findById(req.params.id).populate("class", "name");
++  if (!student) return res.status(404).json({ message: "Student not found" });
++  res.json({ student });
++}));
++
++router.post("/", authorize("admin"), wrap(async (req, res) => {
++  const { name, studentId, classId } = req.body ?? {};
++  if (!name || !studentId || !classId) {
++    return res.status(400).json({ message: "name, studentId and classId are required" });
++  }
++  if (!(await Class.exists({ _id: classId }))) {
++    return res.status(404).json({ message: "Class not found" });
++  }
++  try {
++    const student = await Student.create({
++      ...pick(req.body, ["name", "studentId", "guardianName", "guardianPhone", "guardianEmail"]),
++      class: classId,
++    });
++    res.status(201).json({ student });
++  } catch (err: any) {
++    if (err.code === 11000) return res.status(409).json({ message: "Student ID already exists" });
++    throw err;
++  }
++}));
++
++// bulk add: { classId, students: [{ name, studentId }] }
++router.post("/bulk", authorize("admin"), wrap(async (req, res) => {
++  const { classId, students } = req.body ?? {};
++  if (!classId || !Array.isArray(students) || students.length === 0) {
++    return res.status(400).json({ message: "classId and a non-empty students array are required" });
++  }
++  if (!(await Class.exists({ _id: classId }))) {
++    return res.status(404).json({ message: "Class not found" });
++  }
++  const docs = students
++    .filter((s: any) => s?.name && s?.studentId)
++    .map((s: any) => ({ name: s.name, studentId: String(s.studentId), class: classId }));
++  try {
++    const created = await Student.insertMany(docs, { ordered: false });
++    res.status(201).json({ created: created.length });
++  } catch (err: any) {
++    // ordered:false keeps inserting after duplicates, so report what landed
++    if (err.code === 11000 || err.writeErrors) {
++      return res.status(207).json({
++        created: err.insertedDocs?.length ?? 0,
++        message: "Some students were skipped (duplicate studentId)",
++      });
++    }
++    throw err;
++  }
++}));
++
++router.patch("/:id", authorize("admin"), validId, wrap(async (req, res) => {
++  const update = pick(req.body, [
++    "name", "studentId", "guardianName", "guardianPhone", "guardianEmail", "isActive",
++  ]) as Record<string, unknown>;
++  if (req.body?.classId) update.class = req.body.classId;
++  try {
++    const student = await Student.findByIdAndUpdate(req.params.id, update, {
++      returnDocument: "after",
++      runValidators: true,
++    });
++    if (!student) return res.status(404).json({ message: "Student not found" });
++    res.json({ student });
++  } catch (err: any) {
++    if (err.code === 11000) return res.status(409).json({ message: "Student ID already exists" });
++    throw err;
++  }
++}));
++
++// "delete" = deactivate, so old reports still point to a real student
++router.delete("/:id", authorize("admin"), validId, wrap(async (req, res) => {
++  const student = await Student.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: "after" });
++  if (!student) return res.status(404).json({ message: "Student not found" });
++  res.json({ student });
++}));
++
++export default router;
+diff --git a/backend/routes/users.ts b/backend/routes/users.ts
+index 05534e2..6f4d556 100644
+--- a/backend/routes/users.ts
++++ b/backend/routes/users.ts
+@@ -5,12 +5,12 @@ import { authenticate, authorize } from "../middleware/auth";
+ import { validId, wrap } from "../utils/helpers";
+ 
+ const router = Router();
+-const ROLES = ["admin", "staff", "teacher"];
++const ROLES = ["admin", "principal", "teacher"];
+ 
+ router.use(authenticate, authorize("admin"));
+ 
+ router.get("/", wrap(async (req, res) => {
+-  const filter = req.query.role ? { role: req.query.role } : {};
++  const filter: Record<string, unknown> = req.query.role ? { role: String(req.query.role) } : {};
+   res.json({ users: await User.find(filter).sort("name") });
+ }));
+ 
+diff --git a/backend/scripts/seed.ts b/backend/scripts/seed.ts
+new file mode 100644
+index 0000000..97d16af
+--- /dev/null
++++ b/backend/scripts/seed.ts
+@@ -0,0 +1,62 @@
++// Usage: npm run seed            -> first admin + the 18 classes (10A..12F)
++//        npm run seed -- --demo  -> also adds 24 demo students to class 10A
++import "dotenv/config";
++import bcrypt from "bcryptjs";
++import mongoose from "mongoose";
++import Class from "../models/class";
++import Student from "../models/student";
++import User from "../models/user";
++
++async function main() {
++  const { MONGO_URI, SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD } = process.env;
++  if (!MONGO_URI || !SEED_ADMIN_EMAIL || !SEED_ADMIN_PASSWORD) {
++    throw new Error("Set MONGO_URI, SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD in .env");
++  }
++  if (SEED_ADMIN_PASSWORD.length < 8) throw new Error("SEED_ADMIN_PASSWORD must be 8+ characters");
++
++  await mongoose.connect(MONGO_URI);
++
++  const email = SEED_ADMIN_EMAIL.toLowerCase();
++  if (await User.exists({ email })) {
++    console.log(`Admin ${email} already exists, skipping`);
++  } else {
++    await User.create({
++      name: "Admin",
++      email,
++      role: "admin",
++      passwordHash: await bcrypt.hash(SEED_ADMIN_PASSWORD, 12),
++    });
++    console.log(`Created admin ${email}`);
++  }
++
++  for (const grade of [10, 11, 12]) {
++    for (const letter of ["A", "B", "C", "D", "E", "F"] as const) {
++      await Class.updateOne(
++        { name: `${grade}${letter}` },
++        { $setOnInsert: { grade, letter, name: `${grade}${letter}` } },
++        { upsert: true },
++      );
++    }
++  }
++  console.log("Classes ready (10A to 12F)");
++
++  if (process.argv.includes("--demo")) {
++    const cls = await Class.findOne({ name: "10A" });
++    for (let i = 1; i <= 24; i++) {
++      const n = String(i).padStart(2, "0");
++      await Student.updateOne(
++        { studentId: `10A-${n}` },
++        { $setOnInsert: { name: `Student ${n}`, studentId: `10A-${n}`, class: cls!._id } },
++        { upsert: true },
++      );
++    }
++    console.log("Added 24 demo students to 10A");
++  }
++
++  await mongoose.disconnect();
++}
++
++main().catch((err) => {
++  console.error(err);
++  process.exit(1);
++});
+diff --git a/backend/services/submit_report.ts b/backend/services/submit_report.ts
+new file mode 100644
+index 0000000..f47875e
+--- /dev/null
++++ b/backend/services/submit_report.ts
+@@ -0,0 +1,60 @@
++import mongoose from "mongoose";
++import Class from "../models/class";
++import Report, { STATUSES, SESSIONS, type Status } from "../models/report";
++import Student from "../models/student";
++import { isValidDate, today } from "../utils/helpers";
++
++export type IncomingRecord = { studentId: string; status: Status };
++
++const fail = (message: string, status = 400) =>
++  Object.assign(new Error(message), { status });
++
++export async function submitReport(input: {
++  classId: string;
++  date: string;
++  session: number;
++  records: IncomingRecord[];
++  userId: string;
++}) {
++  const { classId, date, session, records, userId } = input;
++
++  if (!mongoose.isValidObjectId(classId)) throw fail("Invalid class id");
++  if (!isValidDate(date)) throw fail("date must be YYYY-MM-DD");
++  if (date > today()) throw fail("Can't record attendance for a future date");
++  if (!(SESSIONS as readonly number[]).includes(session)) throw fail("session must be 1 to 5");
++  if (!Array.isArray(records) || records.length === 0) throw fail("No records provided");
++  if (records.some((r) => !(STATUSES as readonly string[]).includes(r.status))) {
++    throw fail("Invalid status in records");
++  }
++  const ids = records.map((r) => r.studentId);
++  if (ids.some((id) => !mongoose.isValidObjectId(id))) throw fail("Invalid student id");
++  if (new Set(ids).size !== ids.length) throw fail("Duplicate students in records");
++
++  const cls = await Class.findById(classId);
++  if (!cls || !cls.isActive) throw fail("Class not found", 404);
++
++  const students = await Student.find({ _id: { $in: ids }, class: classId, isActive: true });
++  if (students.length !== ids.length) throw fail("Some students don't belong to this class");
++  const byId = new Map(students.map((s) => [s.id as string, s]));
++
++  const summary = { total: records.length, present: 0, absent: 0, excused: 0 };
++  for (const r of records) summary[r.status]++;
++
++  const filter: Record<string, unknown> = { class: classId, date, session };
++  return Report.findOneAndUpdate(
++    filter,
++    {
++      class: classId,
++      className: cls.name,
++      date,
++      session,
++      summary,
++      submittedBy: userId,
++      records: records.map((r) => {
++        const s = byId.get(r.studentId)!;
++        return { student: s._id, studentName: s.name, studentCode: s.studentId, status: r.status };
++      }),
++    },
++    { upsert: true, returnDocument: "after", runValidators: true },
++  );
++}
+diff --git a/backend/tsconfig.json b/backend/tsconfig.json
+new file mode 100644
+index 0000000..73e8ff4
+--- /dev/null
++++ b/backend/tsconfig.json
+@@ -0,0 +1,14 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "node16",
++    "moduleResolution": "node16",
++    "esModuleInterop": true,
++    "strict": true,
++    "skipLibCheck": true,
++    "outDir": "dist",
++    "rootDir": "."
++  },
++  "include": ["**/*.ts"],
++  "exclude": ["node_modules", "dist"]
++}
+diff --git a/backend/utils/tools.ts b/backend/utils/helpers.ts
+similarity index 65%
+rename from backend/utils/tools.ts
+rename to backend/utils/helpers.ts
+index 59d279f..dfb44d9 100644
+--- a/backend/utils/tools.ts
++++ b/backend/utils/helpers.ts
+@@ -1,13 +1,15 @@
+ import type { RequestHandler } from "express";
+ import mongoose from "mongoose";
+-// import Class from "../models/class"
+ 
+-export const wrap = (func:RequestHandler):RequestHandler => (req,res,next)=>{
+-    Promise.resolve(func(req,res,next)).catch(next)
+-}
++export const wrap =
++  (func: RequestHandler): RequestHandler =>
++  (req, res, next) => {
++    Promise.resolve(func(req, res, next)).catch(next);
++  };
+ 
+-export const today = ()=>
+-    new Date().toLocaleDateString("en-GB",{timeZone:"Africa/Cairo"}).replace("/","-")
++// YYYY-MM-DD in Cairo time (en-CA formats dates exactly like that)
++export const today = () =>
++  new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
+ 
+ export const isValidDate = (d: unknown): d is string =>
+   typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d));
+@@ -22,4 +24,4 @@ export const validId: RequestHandler = (req, res, next) => {
+ export const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+ 
+ export const pick = (obj: any, keys: string[]) =>
+-  Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
+\ No newline at end of file
++  Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
+diff --git a/frontend/.env.example b/frontend/.env.example
+new file mode 100644
+index 0000000..377b2c0
+--- /dev/null
++++ b/frontend/.env.example
+@@ -0,0 +1 @@
++VITE_API_URL=http://localhost:5000/api
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 408cd4c..26d8d13 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -677,9 +677,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -696,9 +693,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -715,9 +709,6 @@
+       "cpu": [
+         "ppc64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -734,9 +725,6 @@
+       "cpu": [
+         "s390x"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -753,9 +741,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -772,9 +757,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1026,9 +1008,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -1049,9 +1028,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -1072,9 +1048,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -1095,9 +1068,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -1261,9 +1231,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1280,9 +1247,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1299,9 +1263,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1318,9 +1279,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -3004,9 +2962,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -3027,9 +2982,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -3050,9 +3002,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -3073,9 +3022,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+diff --git a/frontend/src/App.css b/frontend/src/App.css
+deleted file mode 100644
+index f90339d..0000000
+--- a/frontend/src/App.css
++++ /dev/null
+@@ -1,184 +0,0 @@
+-.counter {
+-  font-size: 16px;
+-  padding: 5px 10px;
+-  border-radius: 5px;
+-  color: var(--accent);
+-  background: var(--accent-bg);
+-  border: 2px solid transparent;
+-  transition: border-color 0.3s;
+-  margin-bottom: 24px;
+-
+-  &:hover {
+-    border-color: var(--accent-border);
+-  }
+-  &:focus-visible {
+-    outline: 2px solid var(--accent);
+-    outline-offset: 2px;
+-  }
+-}
+-
+-.hero {
+-  position: relative;
+-
+-  .base,
+-  .framework,
+-  .vite {
+-    inset-inline: 0;
+-    margin: 0 auto;
+-  }
+-
+-  .base {
+-    width: 170px;
+-    position: relative;
+-    z-index: 0;
+-  }
+-
+-  .framework,
+-  .vite {
+-    position: absolute;
+-  }
+-
+-  .framework {
+-    z-index: 1;
+-    top: 34px;
+-    height: 28px;
+-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+-      scale(1.4);
+-  }
+-
+-  .vite {
+-    z-index: 0;
+-    top: 107px;
+-    height: 26px;
+-    width: auto;
+-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+-      scale(0.8);
+-  }
+-}
+-
+-#center {
+-  display: flex;
+-  flex-direction: column;
+-  gap: 25px;
+-  place-content: center;
+-  place-items: center;
+-  flex-grow: 1;
+-
+-  @media (max-width: 1024px) {
+-    padding: 32px 20px 24px;
+-    gap: 18px;
+-  }
+-}
+-
+-#next-steps {
+-  display: flex;
+-  border-top: 1px solid var(--border);
+-  text-align: left;
+-
+-  & > div {
+-    flex: 1 1 0;
+-    padding: 32px;
+-    @media (max-width: 1024px) {
+-      padding: 24px 20px;
+-    }
+-  }
+-
+-  .icon {
+-    margin-bottom: 16px;
+-    width: 22px;
+-    height: 22px;
+-  }
+-
+-  @media (max-width: 1024px) {
+-    flex-direction: column;
+-    text-align: center;
+-  }
+-}
+-
+-#docs {
+-  border-right: 1px solid var(--border);
+-
+-  @media (max-width: 1024px) {
+-    border-right: none;
+-    border-bottom: 1px solid var(--border);
+-  }
+-}
+-
+-#next-steps ul {
+-  list-style: none;
+-  padding: 0;
+-  display: flex;
+-  gap: 8px;
+-  margin: 32px 0 0;
+-
+-  .logo {
+-    height: 18px;
+-  }
+-
+-  a {
+-    color: var(--text-h);
+-    font-size: 16px;
+-    border-radius: 6px;
+-    background: var(--social-bg);
+-    display: flex;
+-    padding: 6px 12px;
+-    align-items: center;
+-    gap: 8px;
+-    text-decoration: none;
+-    transition: box-shadow 0.3s;
+-
+-    &:hover {
+-      box-shadow: var(--shadow);
+-    }
+-    .button-icon {
+-      height: 18px;
+-      width: 18px;
+-    }
+-  }
+-
+-  @media (max-width: 1024px) {
+-    margin-top: 20px;
+-    flex-wrap: wrap;
+-    justify-content: center;
+-
+-    li {
+-      flex: 1 1 calc(50% - 8px);
+-    }
+-
+-    a {
+-      width: 100%;
+-      justify-content: center;
+-      box-sizing: border-box;
+-    }
+-  }
+-}
+-
+-#spacer {
+-  height: 88px;
+-  border-top: 1px solid var(--border);
+-  @media (max-width: 1024px) {
+-    height: 48px;
+-  }
+-}
+-
+-.ticks {
+-  position: relative;
+-  width: 100%;
+-
+-  &::before,
+-  &::after {
+-    content: '';
+-    position: absolute;
+-    top: -4.5px;
+-    border: 5px solid transparent;
+-  }
+-
+-  &::before {
+-    left: 0;
+-    border-left-color: var(--border);
+-  }
+-  &::after {
+-    right: 0;
+-    border-right-color: var(--border);
+-  }
+-}
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+deleted file mode 100644
+index 27ba1c1..0000000
+--- a/frontend/src/App.tsx
++++ /dev/null
+@@ -1,6 +0,0 @@
+-
+-function App(){
+-  return "hi"
+-}
+-
+-export default App
+\ No newline at end of file
+diff --git a/frontend/src/api/auth.ts b/frontend/src/api/auth.ts
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/frontend/src/api/base.ts b/frontend/src/api/base.ts
+index b1fd98e..0296430 100644
+--- a/frontend/src/api/base.ts
++++ b/frontend/src/api/base.ts
+@@ -1,22 +1,30 @@
+ import axios from "axios";
+ 
+ const api = axios.create({
+-  baseURL: "http://localhost:5000/api",
++  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:5000/api",
+ });
+ 
+-api.interceptors.request.use((config)=>{
+-    const token = localStorage.getItem("token")
+-    if (token) config.headers.Authorization = `Bearer ${token}`
+-    return config;
+-})
++api.interceptors.request.use((config) => {
++  const token = localStorage.getItem("token");
++  if (token) config.headers.Authorization = `Bearer ${token}`;
++  return config;
++});
+ 
+-api.interceptors.response.use((res)=>res,err=>{
+-    const isLogin = err.config?.url?.includes("/auth/login")
+-    if (err.response?.status === 401 && !isLogin){
+-        localStorage.removeItem("token")
+-        window.location.href = "/login"
++api.interceptors.response.use(
++  (res) => res,
++  (err) => {
++    const isLogin = err.config?.url?.includes("/auth/login");
++    if (err.response?.status === 401 && !isLogin) {
++      localStorage.removeItem("token");
++      if (window.location.pathname !== "/login") window.location.href = "/login";
+     }
+-    return Promise.reject(err)
+-})
++    return Promise.reject(err);
++  },
++);
++
++export function errorMessage(err: unknown): string {
++  const e = err as { response?: { data?: { message?: string } }; message?: string };
++  return e?.response?.data?.message ?? e?.message ?? "Something went wrong";
++}
+ 
+-export default api;
+\ No newline at end of file
++export default api;
+diff --git a/frontend/src/api/endpoints.ts b/frontend/src/api/endpoints.ts
+new file mode 100644
+index 0000000..6bcb077
+--- /dev/null
++++ b/frontend/src/api/endpoints.ts
+@@ -0,0 +1,53 @@
++import api from "./base";
++import type {
++  ClassItem, ReportItem, Status, StudentDay, StudentItem, UserItem,
++} from "./types";
++import type { Role } from "../components/auth_provider";
++
++export const getClasses = () =>
++  api.get<{ classes: ClassItem[] }>("/classes").then((r) => r.data.classes);
++
++export const getStudents = (classId?: string) =>
++  api
++    .get<{ students: StudentItem[] }>("/students", { params: classId ? { class: classId } : {} })
++    .then((r) => r.data.students);
++
++export const getStudent = (id: string) =>
++  api.get<{ student: StudentItem }>(`/students/${id}`).then((r) => r.data.student);
++
++export const addStudent = (body: { name: string; studentId: string; classId: string }) =>
++  api.post("/students", body);
++
++export const addStudentsBulk = (classId: string, students: { name: string; studentId: string }[]) =>
++  api.post<{ created: number }>("/students/bulk", { classId, students }).then((r) => r.data);
++
++export const deactivateStudent = (id: string) => api.delete(`/students/${id}`);
++
++export const getClassReport = (classId: string, date: string, session: number) =>
++  api
++    .get<{ report: ReportItem | null }>(`/reports/class/${classId}`, { params: { date, session } })
++    .then((r) => r.data.report);
++
++export const submitReport = (body: {
++  classId: string;
++  date: string;
++  session: number;
++  records: { studentId: string; status: Status }[];
++}) => api.post<{ report: ReportItem }>("/reports", body).then((r) => r.data.report);
++
++export const getReportDates = () =>
++  api.get<{ dates: string[] }>("/reports/dates").then((r) => r.data.dates);
++
++export const getReportsForDate = (date: string) =>
++  api.get<{ reports: ReportItem[] }>("/reports", { params: { date } }).then((r) => r.data.reports);
++
++export const getStudentHistory = (id: string) =>
++  api.get<{ days: StudentDay[] }>(`/reports/student/${id}`).then((r) => r.data.days);
++
++export const getUsers = () => api.get<{ users: UserItem[] }>("/users").then((r) => r.data.users);
++
++export const createUser = (body: { name: string; email: string; password: string; role: Role }) =>
++  api.post("/users", body);
++
++export const updateUser = (id: string, body: Partial<{ isActive: boolean; role: Role }>) =>
++  api.patch(`/users/${id}`, body);
+diff --git a/frontend/src/api/types.ts b/frontend/src/api/types.ts
+new file mode 100644
+index 0000000..d19c471
+--- /dev/null
++++ b/frontend/src/api/types.ts
+@@ -0,0 +1,47 @@
++import type { Role } from "../components/auth_provider";
++
++export type Status = "present" | "absent" | "excused";
++
++export interface ClassItem {
++  _id: string;
++  name: string;
++  grade: number;
++  letter: string;
++}
++
++export interface StudentItem {
++  _id: string;
++  name: string;
++  studentId: string;
++  class: { _id: string; name: string } | string;
++  isActive: boolean;
++}
++
++export interface ReportRecord {
++  student: string;
++  studentName: string;
++  studentCode: string;
++  status: Status;
++}
++
++export interface ReportItem {
++  _id: string;
++  class: string;
++  className: string;
++  date: string;
++  session: number;
++  records: ReportRecord[];
++}
++
++export interface UserItem {
++  _id: string;
++  name: string;
++  email: string;
++  role: Role;
++  isActive: boolean;
++}
++
++export interface StudentDay {
++  date: string;
++  sessions: Record<string, Status>;
++}
+diff --git a/frontend/src/components/Layout.tsx b/frontend/src/components/Layout.tsx
+new file mode 100644
+index 0000000..b29d1cb
+--- /dev/null
++++ b/frontend/src/components/Layout.tsx
+@@ -0,0 +1,96 @@
++import type { ReactNode } from "react";
++import { Link, NavLink } from "react-router-dom";
++import stemIcon from "../assets/stem_icon.png";
++import { LINKS } from "../lib/nav";
++import { useAuth } from "./auth_provider";
++import RoleBadge from "./RoleBadge";
++
++const SCHOOL_NAME = "STEM 6th of October";
++const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
++
++export default function Layout({ children }: { children: ReactNode }) {
++  const { user, logout } = useAuth();
++  const links = user ? LINKS.filter((l) => l.roles.includes(user.role)) : [];
++
++  return (
++    <div className="flex min-h-screen flex-col bg-slate-100">
++      <header className="bg-[#1a1a4e] shadow-lg">
++        <nav className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
++          <Link to="/" className="flex items-center gap-3">
++            <img src={stemIcon} className="h-14 w-14 object-contain" alt="logo" />
++            <div className="leading-tight">
++              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">{SCHOOL_NAME}</p>
++              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
++            </div>
++          </Link>
++
++          {user ? (
++            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
++              {links.map((l) => (
++                <NavLink
++                  key={l.to}
++                  to={l.to}
++                  className={({ isActive }) =>
++                    `font-semibold ${isActive ? "text-white underline" : "text-white/70 hover:text-white"}`
++                  }
++                >
++                  {l.label}
++                </NavLink>
++              ))}
++              <RoleBadge />
++              <button onClick={logout} className="font-semibold text-white/70 hover:text-white">
++                Log out
++              </button>
++            </div>
++          ) : (
++            <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
++              Attendance Management System
++            </p>
++          )}
++        </nav>
++      </header>
++
++      <main className="flex-1 p-4 sm:p-8">
++        <div className="mx-auto max-w-7xl">{children}</div>
++      </main>
++
++      <footer className="bg-[#0b0b1e] text-white">
++        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
++          <div>
++            <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
++            <div className="grid grid-cols-2 gap-y-3 text-slate-400">
++              <a href="https://www.stemegypt.net/" target="_blank" rel="noopener noreferrer">School Website</a>
++              <a href="https://www.facebook.com/STEM6october/" target="_blank" rel="noopener noreferrer">Facebook</a>
++              <a href="mailto:counselor@stemegypt.edu.eg">Email</a>
++              <a href="https://wa.me/201159114973" target="_blank" rel="noopener noreferrer">WhatsApp</a>
++            </div>
++          </div>
++          <div>
++            <h3 className="mb-6 text-2xl font-bold">About Us</h3>
++            <div className="flex gap-4">
++              <img src={stemIcon} className="h-16 w-16 shrink-0 object-contain" alt="logo" />
++              <div>
++                <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
++                <p className="mt-2 text-slate-400">
++                  A public high school that provides top-notch education for academically-motivated students.
++                </p>
++                <p className="mt-4 text-slate-400">Cosmic Village, 6th October, Egypt</p>
++              </div>
++            </div>
++          </div>
++        </div>
++        <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
++          <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
++            <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
++            <p>
++              Managed by{" "}
++              <a href="https://github.com/ahmed-3sker" target="_blank" rel="noopener noreferrer">3sker</a>{" "}
++              &nbsp;
++              <a href="https://github.com/hazorox" target="_blank" rel="noopener noreferrer">hazoro</a>
++            </p>
++          </div>
++        </div>
++      </footer>
++    </div>
++  );
++}
+diff --git a/frontend/src/components/auth_provider.tsx b/frontend/src/components/auth_provider.tsx
+index 4cb9a7f..4440f76 100644
+--- a/frontend/src/components/auth_provider.tsx
++++ b/frontend/src/components/auth_provider.tsx
+@@ -27,16 +27,14 @@ const AuthContext = createContext<AuthState | null>(null);
+ 
+ export function AuthProvider({ children }: { children: ReactNode }) {
+   const [user, setUser] = useState<User | null>(null);
+-  const [loading, setLoading] = useState(true);
++  // only "loading" if there is a token to verify
++  const [loading, setLoading] = useState(() => !!localStorage.getItem("token"));
+ 
+   useEffect(() => {
+     let cancelled = false;
+     const token = localStorage.getItem("token");
+ 
+-    if (!token) {
+-      setLoading(false);
+-      return;
+-    }
++    if (!token) return;
+ 
+     api
+       .get("/auth/me")
+diff --git a/frontend/src/lib/attendance.ts b/frontend/src/lib/attendance.ts
+new file mode 100644
+index 0000000..338c4be
+--- /dev/null
++++ b/frontend/src/lib/attendance.ts
+@@ -0,0 +1,102 @@
++import type { ReportItem, Status } from "../api/types";
++
++export const STATUSES: Status[] = ["present", "absent", "excused"];
++export const SESSIONS = [1, 2, 3, 4, 5];
++
++export const LABEL: Record<Status, string> = {
++  present: "Present",
++  absent: "Absent",
++  excused: "Excused",
++};
++
++export const badge: Record<Status, string> = {
++  present: "bg-green-100 text-green-800",
++  absent: "bg-red-100 text-red-800",
++  excused: "bg-blue-100 text-blue-800",
++};
++
++export const tile: Record<Status, string> = {
++  present: "bg-green-50 text-green-700",
++  absent: "bg-red-50 text-red-700",
++  excused: "bg-blue-50 text-blue-700",
++};
++
++export const dot: Record<Status, string> = {
++  present: "bg-green-500",
++  absent: "bg-red-500",
++  excused: "bg-blue-500",
++};
++
++export function buttonStyle(status: Status, selected: boolean) {
++  const styles: Record<Status, [string, string]> = {
++    present: ["bg-green-600 text-white", "border border-green-200 text-green-700 hover:bg-green-50"],
++    absent: ["bg-red-600 text-white", "border border-red-200 text-red-700 hover:bg-red-50"],
++    excused: ["bg-blue-600 text-white", "border border-blue-200 text-blue-700 hover:bg-blue-50"],
++  };
++  return styles[status][selected ? 0 : 1];
++}
++
++// YYYY-MM-DD in Cairo time, same as the backend, so "today" matches on both sides
++export function todayISO() {
++  return new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
++}
++
++export function percent(part: number, total: number) {
++  return total === 0 ? "-" : `${Math.round((part / total) * 100)}%`;
++}
++
++// Absent beats excused beats present
++export function dayStatus(statuses: Status[]): Status | null {
++  if (statuses.length === 0) return null;
++  if (statuses.includes("absent")) return "absent";
++  if (statuses.includes("excused")) return "excused";
++  return "present";
++}
++
++export type StudentLine = {
++  studentId: string; // database id, used for links
++  code: string;
++  name: string;
++  className: string;
++  sessions: Record<number, Status>;
++};
++
++export function buildLines(reports: ReportItem[], classFilter = "all"): StudentLine[] {
++  const map = new Map<string, StudentLine>();
++  for (const report of reports) {
++    if (classFilter !== "all" && report.className !== classFilter) continue;
++    for (const r of report.records) {
++      const key = `${report.className}-${r.studentCode}`;
++      if (!map.has(key)) {
++        map.set(key, {
++          studentId: r.student,
++          code: r.studentCode,
++          name: r.studentName,
++          className: report.className,
++          sessions: {},
++        });
++      }
++      map.get(key)!.sessions[report.session] = r.status;
++    }
++  }
++  return Array.from(map.values()).sort(
++    (a, b) => a.className.localeCompare(b.className) || a.code.localeCompare(b.code),
++  );
++}
++
++export function lineStatus(line: StudentLine, upTo: number): Status | null {
++  return dayStatus(SESSIONS.filter((n) => n <= upTo).map((n) => line.sessions[n]).filter(Boolean));
++}
++
++export function countLines(lines: StudentLine[], upTo: number) {
++  const counts: Record<Status, number> = { present: 0, absent: 0, excused: 0 };
++  let total = 0;
++  for (const line of lines) {
++    const status = lineStatus(line, upTo);
++    if (status) {
++      counts[status] += 1;
++      total += 1;
++    }
++  }
++  return { counts, total, totalAbsent: counts.absent + counts.excused };
++}
+diff --git a/frontend/src/lib/nav.ts b/frontend/src/lib/nav.ts
+new file mode 100644
+index 0000000..4decd38
+--- /dev/null
++++ b/frontend/src/lib/nav.ts
+@@ -0,0 +1,9 @@
++import type { Role } from "../components/auth_provider";
++
++export const LINKS: { to: string; label: string; description: string; roles: Role[] }[] = [
++  { to: "/dashboard", label: "Dashboard", description: "Today at a glance", roles: ["admin", "principal"] },
++  { to: "/attendance", label: "Attendance", description: "Take attendance for a class", roles: ["admin", "teacher"] },
++  { to: "/students", label: "Students", description: "Browse students and their history", roles: ["admin", "principal", "teacher"] },
++  { to: "/reports", label: "Reports", description: "Daily attendance reports", roles: ["admin", "principal"] },
++  { to: "/users", label: "Users", description: "Manage staff accounts", roles: ["admin"] },
++];
+diff --git a/frontend/src/lib/use_fetch.ts b/frontend/src/lib/use_fetch.ts
+new file mode 100644
+index 0000000..d12321a
+--- /dev/null
++++ b/frontend/src/lib/use_fetch.ts
+@@ -0,0 +1,36 @@
++import { useEffect, useState } from "react";
++import { errorMessage } from "../api/base";
++
++type State<T> = { key: string | null; data?: T; error?: string };
++
++// Fetches whenever `key` changes. Pass null to skip. `reload()` refetches.
++// "loading" is derived from the key, so no setState runs synchronously in the effect.
++export function useFetch<T>(key: string | null, fetcher: () => Promise<T>) {
++  const [state, setState] = useState<State<T>>({ key: null });
++  const [tick, setTick] = useState(0);
++
++  useEffect(() => {
++    if (key === null) return;
++    let cancelled = false;
++    fetcher()
++      .then((data) => {
++        if (!cancelled) setState({ key, data });
++      })
++      .catch((err) => {
++        if (!cancelled) setState({ key, error: errorMessage(err) });
++      });
++    return () => {
++      cancelled = true;
++    };
++    // fetcher is a fresh closure every render; `key` is what identifies the request
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [key, tick]);
++
++  const ready = key !== null && state.key === key;
++  return {
++    data: ready ? state.data : undefined,
++    error: ready ? state.error : undefined,
++    loading: key !== null && !ready,
++    reload: () => setTick((t) => t + 1),
++  };
++}
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index b88e6e7..ab68197 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -11,58 +11,42 @@ import Dashboard from "./pages/dashboard";
+ import Reports from "./pages/reports";
+ import ClassesList from "./pages/Class_list";
+ import Attendance from "./pages/Attendance";
+-import StudentDashBorad from "./pages/student_dashboard";
+-
+-
++import Students from "./pages/Students";
++import StudentDashboard from "./pages/student_dashboard";
++import Users from "./pages/Users";
+ 
+ createRoot(document.getElementById("root")!).render(
+   <StrictMode>
+     <AuthProvider>
+       <BrowserRouter>
+         <Routes>
++          <Route path="/login" element={<Login />} />
+ 
+-            {/* <Route element={<ProtectedRoute roles=["idk"] />} /> */}
+-              <Route path="/attendance" element={<ClassesList />} />
+-              <Route path="/attendance/:classId" element={<Attendance />} />
+-            {/* </Route> */}
+-          <Route path="/Login" element={<Login />} />
+-
+-          {/* Any Logged in batatis */}
+-
++          {/* any logged-in user */}
+           <Route element={<ProtectedRoute />}>
+-          <Route path="/" element={<Home />} />
+-          <Route path="/Classes" element={<ClassesList />} />
+-            
+-
+-            {/* Atef & Admins */}
++            <Route path="/" element={<Home />} />
++            <Route path="/students" element={<Students />} />
++            <Route path="/students/:id" element={<StudentDashboard />} />
+ 
++            {/* teachers + admins take attendance */}
++            <Route element={<ProtectedRoute roles={["teacher", "admin"]} />}>
++              <Route path="/attendance" element={<ClassesList />} />
++              <Route path="/attendance/:classId" element={<Attendance />} />
++            </Route>
+ 
++            {/* principal + admins read reports */}
+             <Route element={<ProtectedRoute roles={["principal", "admin"]} />}>
+-              <Route path="/student_dashboard" element={<StudentDashBorad />} />
++              <Route path="/dashboard" element={<Dashboard />} />
+               <Route path="/reports" element={<Reports />} />
+             </Route>
+ 
+-            {/* Teachers */}
+-
+-            {/* teachers and admins */}
+-
+-
+-            {/* all (bonus if we finished the web before the deadline)*/}
+-
+-            {/* <Route path="/students" element={<Students />} />
+-            <Route path="/students/:id" element={<StudentProfile />} /> */}
+-
+-            {/* hazoro & asker only */}
+-            
+-            {/* we will start on it when remeber the use of it  */}
+-
+-            {/* <Route element={<ProtectedRoute roles={["admin"]} />}>
++            {/* admins only */}
++            <Route element={<ProtectedRoute roles={["admin"]} />}>
+               <Route path="/users" element={<Users />} />
+-            </Route> */}
+-
+-
++            </Route>
+           </Route>
+ 
++          <Route path="/classes" element={<Navigate to="/attendance" replace />} />
+           <Route path="*" element={<NotFound />} />
+         </Routes>
+       </BrowserRouter>
+diff --git a/frontend/src/pages/Attendance.tsx b/frontend/src/pages/Attendance.tsx
+index 938d13a..a461594 100644
+--- a/frontend/src/pages/Attendance.tsx
++++ b/frontend/src/pages/Attendance.tsx
+@@ -1,431 +1,192 @@
+-import { useNavigate, useParams } from "react-router-dom";
+-import { useEffect, useState } from "react";
+-import stemIcon from "../assets/stem_icon.png";
++import { useState } from "react";
++import { Link, useParams } from "react-router-dom";
++import { errorMessage } from "../api/base";
++import { getClassReport, getClasses, getStudents, submitReport } from "../api/endpoints";
++import type { Status } from "../api/types";
++import Layout from "../components/Layout";
++import { LABEL, SESSIONS, STATUSES, buttonStyle, todayISO } from "../lib/attendance";
++import { useFetch } from "../lib/use_fetch";
+ 
+-const SCHOOL_NAME = "STEM 6th of October";
+-const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
+-type Status = "Present" | "Absent" | "Excused";
+-
+-type Student = {
+-  id: number;
+-  name: string;
+-};
+-
+-type AttendanceRecord = Record<number, Status>;
+-
+-const students: Student[] = Array.from(
+-  { length: 24 },
+-  (_, index) => ({
+-    id: index + 1,
+-    name: `Student ${String(index + 1).padStart(2, "0")}`,
+-  })
+-);
+-
+-const sessions = [1, 2, 3, 4, 5];
+-
+-function getToday() {
+-  const date = new Date();
+-  const year = date.getFullYear();
+-  const month = String(date.getMonth() + 1).padStart(2, "0");
+-  const day = String(date.getDate()).padStart(2, "0");
+-
+-  return `${year}-${month}-${day}`;
+-}
+-
+-function getStorageKey(
+-  className: string,
+-  date: string,
+-  session: number
+-) {
+-  return `attendance-${className}-${date}-session-${session}`;
+-}
+-
+-function loadAttendance(key: string): AttendanceRecord {
+-  try {
+-    const saved = localStorage.getItem(key);
+-    return saved ? (JSON.parse(saved) as AttendanceRecord) : {};
+-  } catch {
+-    return {};
+-  }
+-}
++type Marks = Record<string, Status>;
+ 
+ export default function Attendance() {
+-  const { classId: className = "10a" } = useParams();
+-  const navigate = useNavigate();
++  const { classId = "" } = useParams();
+ 
+-  const [date, setDate] = useState(getToday);
++  const [date, setDate] = useState(todayISO);
+   const [session, setSession] = useState(1);
+-  const [attendance, setAttendance] = useState<AttendanceRecord>({});
+-  const [savedMessage, setSavedMessage] = useState("");
+-
+-  const storageKey = getStorageKey(className, date, session);
++  const key = `${classId}|${date}|${session}`;
+ 
+-  useEffect(() => {
+-    setAttendance(loadAttendance(storageKey));
+-    setSavedMessage("");
+-  }, [storageKey]);
++  const classes = useFetch("classes", getClasses);
++  const students = useFetch(classId, () => getStudents(classId));
++  const saved = useFetch(key, () => getClassReport(classId, date, session));
+ 
+-  function markStudent(id: number, status: Status) {
+-    setAttendance((previous) => ({
+-      ...previous,
+-      [id]: status,
+-    }));
+-    setSavedMessage("");
+-  }
++  // Edits are keyed by class/date/session, so switching any of them drops unsaved edits
++  // and shows what's already saved for the new selection.
++  const [edits, setEdits] = useState<{ key: string; marks: Marks } | null>(null);
++  const [notice, setNotice] = useState<{ key: string; text: string; ok: boolean } | null>(null);
++  const [saving, setSaving] = useState(false);
+ 
+-  function markAll(status: Status) {
+-    const allStudents: AttendanceRecord = {};
++  const className = classes.data?.find((c) => c._id === classId)?.name;
++  const roster = students.data ?? [];
+ 
+-    students.forEach((student) => {
+-      allStudents[student.id] = status;
+-    });
++  const savedMarks: Marks = {};
++  saved.data?.records.forEach((r) => {
++    savedMarks[r.student] = r.status;
++  });
++  const marks = edits?.key === key ? edits.marks : savedMarks;
+ 
+-    setAttendance(allStudents);
+-    setSavedMessage("");
++  function mark(id: string, status: Status) {
++    setEdits({ key, marks: { ...marks, [id]: status } });
+   }
+-  const STATUSES: Status[] = ["Present", "Absent", "Excused"];
+ 
+-  function statusStyle(status: Status, selected: boolean) {
+-    const styles: Record<Status, [string, string]> = {
+-      Present: ["bg-green-600 text-white", "border border-green-200 text-green-700 hover:bg-green-50"],
+-      Absent: ["bg-red-600 text-white", "border border-red-200 text-red-700 hover:bg-red-50"],
+-      Excused: ["bg-blue-600 text-white", "border border-blue-200 text-blue-700 hover:bg-blue-50"],
+-    };
+-    return styles[status][selected ? 0 : 1];
++  function markAll(status: Status) {
++    setEdits({ key, marks: Object.fromEntries(roster.map((s) => [s._id, status])) });
+   }
+-  function saveAttendance() {
++
++  const counts = { present: 0, absent: 0, excused: 0 };
++  roster.forEach((s) => {
++    const m = marks[s._id];
++    if (m) counts[m] += 1;
++  });
++  const unmarked = roster.length - counts.present - counts.absent - counts.excused;
++
++  async function save() {
++    if (unmarked > 0) {
++      setNotice({ key, ok: false, text: `Mark every student first (${unmarked} left).` });
++      return;
++    }
++    setSaving(true);
+     try {
+-      localStorage.setItem(storageKey, JSON.stringify(attendance));
+-      setSavedMessage("Attendance saved successfully.");
+-    } catch {
+-      setSavedMessage(
+-        "Could not save attendance. Check browser storage settings."
+-      );
++      await submitReport({
++        classId, date, session,
++        records: roster.map((s) => ({ studentId: s._id, status: marks[s._id] })),
++      });
++      setNotice({ key, ok: true, text: "Attendance saved." });
++      saved.reload();
++    } catch (err) {
++      setNotice({ key, ok: false, text: errorMessage(err) });
++    } finally {
++      setSaving(false);
+     }
+   }
+ 
+-  const presentCount = students.filter(
+-    (student) => attendance[student.id] === "Present"
+-  ).length;
+-
+-  const absentCount = students.filter(
+-    (student) => attendance[student.id] === "Absent"
+-  ).length;
+-
+-  const excusedCount = students.filter(
+-    (student) => attendance[student.id] === "Excused"
+-  ).length;
+-
+-  const unmarkedCount =
+-    students.length - presentCount - absentCount - excusedCount;
++  const message = notice?.key === key ? notice : null;
++  const inputClass =
++    "w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+ 
+   return (
+-    <div className="flex min-h-screen flex-col bg-slate-100">
+-      <header className="bg-[#1a1a4e] shadow-lg">
+-        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+-          <div className="flex items-center gap-3">
+-            <div className="flex h-14 w-14 items-center justify-center rounded-lg font-bold uppercase tracking-wider text-white/60">
+-              <img src={stemIcon} className="mx-auto" alt="logo" />
+-            </div>
+-
+-            <div className="leading-tight">
+-              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">
+-                {SCHOOL_NAME}
+-              </p>
+-              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
+-            </div>
+-          </div>
+-
+-          <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
+-            Attendance Management System
+-          </p>
+-        </nav>
+-      </header>
++    <Layout>
++      <Link to="/attendance" className="mb-6 inline-block font-semibold text-blue-600 hover:text-blue-800">
++        ← Back to Classes
++      </Link>
++
++      <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
++        <div>
++          <p className="text-sm font-semibold uppercase tracking-widest text-blue-600">Attendance Management</p>
++          <h1 className="mt-2 text-3xl font-bold text-slate-900">Class {className ?? "..."}</h1>
++        </div>
++        <div className="rounded-xl bg-white px-5 py-3 shadow-sm">
++          <p className="text-sm text-slate-500">Total Students</p>
++          <p className="text-2xl font-bold text-slate-900">{roster.length}</p>
++        </div>
++      </div>
+ 
+-      <div className="flex-1 p-4 sm:p-8">
+-        <div className="mx-auto max-w-7xl">
+-          <button
+-            onClick={() => navigate("/classes")}
+-            className="mb-6 font-semibold text-blue-600 hover:text-blue-800"
++      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
++        <div className="rounded-xl border border-slate-200 bg-white p-5">
++          <label htmlFor="attendance-date" className="mb-2 block font-semibold text-slate-700">Attendance Date</label>
++          <input
++            id="attendance-date" type="date" value={date} max={todayISO()}
++            onChange={(e) => setDate(e.target.value || todayISO())} className={inputClass}
++          />
++        </div>
++        <div className="rounded-xl border border-slate-200 bg-white p-5">
++          <label htmlFor="attendance-session" className="mb-2 block font-semibold text-slate-700">Session</label>
++          <select
++            id="attendance-session" value={session}
++            onChange={(e) => setSession(Number(e.target.value))} className={inputClass}
+           >
+-            ← Back to Classes
+-          </button>
+-
+-          <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+-            <div>
+-              <p className="text-sm font-semibold uppercase tracking-widest text-blue-600">
+-                Attendance Management
+-              </p>
+-
+-              <h1 className="mt-2 text-3xl font-bold text-slate-900">
+-                Class {className.toUpperCase()}
+-              </h1>
+-            </div>
++            {SESSIONS.map((n) => <option key={n} value={n}>Session {n}</option>)}
++          </select>
++        </div>
++      </div>
+ 
+-            <div className="rounded-xl bg-white px-5 py-3 shadow-sm">
+-              <p className="text-sm text-slate-500">Total Students</p>
+-              <p className="text-2xl font-bold text-slate-900">
+-                {students.length}
+-              </p>
+-            </div>
++      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
++        {[
++          { label: "Present", count: counts.present, color: "text-green-700 bg-green-50" },
++          { label: "Absent", count: counts.absent, color: "text-red-700 bg-red-50" },
++          { label: "Excused", count: counts.excused, color: "text-blue-700 bg-blue-50" },
++          { label: "Unmarked", count: unmarked, color: "text-slate-700 bg-slate-200" },
++        ].map((item) => (
++          <div key={item.label} className={`rounded-xl p-4 ${item.color}`}>
++            <p className="text-sm font-medium">{item.label}</p>
++            <p className="mt-1 text-2xl font-bold">{item.count}</p>
+           </div>
++        ))}
++      </div>
+ 
+-          <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+-              <label
+-                htmlFor="attendance-date"
+-                className="mb-2 block font-semibold text-slate-700"
+-              >
+-                Attendance Date
+-              </label>
+-
+-              <input
+-                id="attendance-date"
+-                type="date"
+-                value={date}
+-                max={getToday()}
+-                onChange={(event) =>
+-                  setDate(event.target.value || getToday())
+-                }
+-                className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+-              />
+-            </div>
+-
+-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+-              <label
+-                htmlFor="attendance-session"
+-                className="mb-2 block font-semibold text-slate-700"
+-              >
+-                Session
+-              </label>
+-
+-              <select
+-                id="attendance-session"
+-                value={session}
+-                onChange={(event) => setSession(Number(event.target.value))}
+-                className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+-              >
+-                {sessions.map((number) => (
+-                  <option key={number} value={number}>
+-                    Session {number}
+-                  </option>
+-                ))}
+-              </select>
+-            </div>
+-          </div>
++      {(students.error || saved.error || classes.error) && (
++        <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-red-600">
++          {students.error ?? saved.error ?? classes.error}
++        </p>
++      )}
+ 
+-          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+-            {[
+-              { label: "Present", count: presentCount, color: "text-green-700 bg-green-50" },
+-              { label: "Absent", count: absentCount, color: "text-red-700 bg-red-50" },
+-              { label: "Excused", count: excusedCount, color: "text-blue-700 bg-blue-50" },
+-              { label: "Unmarked", count: unmarkedCount, color: "text-slate-700 bg-slate-200" },
+-            ].map((item) => (
+-              <div key={item.label} className={`rounded-xl p-4 ${item.color}`}>
+-                <p className="text-sm font-medium">{item.label}</p>
+-                <p className="mt-1 text-2xl font-bold">{item.count}</p>
+-              </div>
+-            ))}
++      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++        <div className="flex flex-col justify-between gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center">
++          <div>
++            <h2 className="text-xl font-bold text-slate-900">Student Attendance</h2>
++            <p className="mt-1 text-sm text-slate-500">
++              {date} · Session {session}
++              {saved.data && " · already saved, saving again overwrites it"}
++            </p>
+           </div>
+-
+-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+-            <div className="flex flex-col justify-between gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center">
+-              <div>
+-                <h2 className="text-xl font-bold text-slate-900">
+-                  Student Attendance
+-                </h2>
+-                <p className="mt-1 text-sm text-slate-500">
+-                  {date} · Session {session}
+-                </p>
+-              </div>
+-
+-              <div className="flex flex-wrap gap-2">
+-                <button
+-                  onClick={() => markAll("Present")}
+-                  className="rounded-lg bg-green-100 px-3 py-2 text-sm font-semibold text-green-800 hover:bg-green-200"
+-                >
+-                  All Present
+-                </button>
+-
+-                <button
+-                  onClick={() => markAll("Absent")}
+-                  className="rounded-lg bg-red-100 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-200"
+-                >
+-                  All Absent
+-                </button>
+-              </div>
+-            </div>
+-
+-           
+-            <div className="divide-y divide-slate-100 md:hidden">
+-              {students.map((student) => (
+-                <div key={student.id} className="p-4">
+-                  <div className="mb-3 flex items-center justify-between">
+-                    <p className="font-medium text-slate-900">{student.name}</p>
+-                    <span className="text-sm text-slate-500">ID {student.id}</span>
+-                  </div>
+-
+-                  <div className="grid grid-cols-3 gap-2">
+-                    {STATUSES.map((status) => (
+-                      <button
+-                        key={status}
+-                        onClick={() => markStudent(student.id, status)}
+-                        aria-pressed={attendance[student.id] === status}
+-                        className={`rounded-lg px-2 py-2.5 text-sm font-semibold transition ${statusStyle(
+-                          status,
+-                          attendance[student.id] === status
+-                        )}`}
+-                      >
+-                        {status}
+-                      </button>
+-                    ))}
+-                  </div>
+-                </div>
+-              ))}
+-            </div>
+-
+-            
+-            <div className="hidden overflow-x-auto md:block">
+-              <table className="w-full text-left">
+-                <thead className="bg-slate-50 text-sm text-slate-600">
+-                  <tr>
+-                    <th className="px-5 py-4">ID</th>
+-                    <th className="px-5 py-4">Student</th>
+-                    <th className="px-5 py-4 text-right">Attendance Status</th>
+-                  </tr>
+-                </thead>
+-
+-                <tbody className="divide-y divide-slate-100">
+-                  {students.map((student) => (
+-                    <tr key={student.id} className="hover:bg-slate-50">
+-                      <td className="px-5 py-4 text-slate-500">{student.id}</td>
+-                      <td className="px-5 py-4 font-medium text-slate-900">{student.name}</td>
+-                      <td className="px-5 py-4">
+-                        <div className="flex justify-end gap-3">
+-                          {STATUSES.map((status) => (
+-                            <button
+-                              key={status}
+-                              onClick={() => markStudent(student.id, status)}
+-                              aria-pressed={attendance[student.id] === status}
+-                              className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${statusStyle(
+-                                status,
+-                                attendance[student.id] === status
+-                              )}`}
+-                            >
+-                              {status}
+-                            </button>
+-                          ))}
+-                        </div>
+-                      </td>
+-                    </tr>
+-                  ))}
+-                </tbody>
+-              </table>
+-            </div>
+-
+-            <div className="flex flex-col gap-3 border-t border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+-              <p aria-live="polite" className="text-sm text-slate-600">
+-                {savedMessage ||
+-                  `${students.length - unmarkedCount} of ${students.length} students marked.`}
+-              </p>
+-
+-              <button
+-                onClick={saveAttendance}
+-                className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+-              >
+-                Save Attendance
+-              </button>
+-            </div>
++          <div className="flex flex-wrap gap-2">
++            <button onClick={() => markAll("present")} className="rounded-lg bg-green-100 px-3 py-2 text-sm font-semibold text-green-800 hover:bg-green-200">
++              All Present
++            </button>
++            <button onClick={() => markAll("absent")} className="rounded-lg bg-red-100 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-200">
++              All Absent
++            </button>
+           </div>
+         </div>
+-      </div>
+ 
+-      <footer className="bg-[#0b0b1e] text-white">
+-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
+-            <div className="grid grid-cols-2 gap-y-3 text-slate-400">
+-              <a
+-                href="https://www.stemegypt.net/"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                School Website
+-              </a>
+-              <a
+-                href="https://web.facebook.com/STEM6october/?_rdc=1&_rdr#"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                Facebook
+-              </a>
+-              <p>Contact Us</p>
+-              <p></p>
+-              <a
+-                href="mailto:counselor@stemegypt.edu.eg"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                Email
+-              </a>
+-              <a
+-                href="https://wa.me/201159114973"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                Phone
+-              </a>
+-
+-              
++        {(students.loading || saved.loading) && <p className="p-5 text-slate-500">Loading...</p>}
++        {!students.loading && roster.length === 0 && !students.error && (
++          <p className="p-5 text-slate-500">This class has no students yet. An admin can add them from the Students page.</p>
++        )}
+ 
+-              <a href="/classes">classes</a>
+-            </div>
+-          </div>
+-
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">About Us</h3>
+-            <div className="flex gap-4">
+-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg text-[10px] uppercase text-white/50">
+-                <img src={stemIcon} className="mx-auto" alt="logo" />
+-              </div>
++        <div className="divide-y divide-slate-100">
++          {roster.map((s) => (
++            <div key={s._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+               <div>
+-                <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
+-                <p className="mt-2 text-slate-400">
+-                  A public high school that provides top-notch education for
+-                  academically-motivated students.
+-                </p>
+-                <p className="mt-4 text-slate-400">
+-                  Cosmic Village, 6th October, Egypt
+-                </p>
++                <p className="font-medium text-slate-900">{s.name}</p>
++                <p className="text-sm text-slate-500">{s.studentId}</p>
++              </div>
++              <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-3">
++                {STATUSES.map((status) => (
++                  <button
++                    key={status} onClick={() => mark(s._id, status)} aria-pressed={marks[s._id] === status}
++                    className={`rounded-lg px-3 py-2.5 text-sm font-semibold transition ${buttonStyle(status, marks[s._id] === status)}`}
++                  >
++                    {LABEL[status]}
++                  </button>
++                ))}
+               </div>
+             </div>
+-          </div>
++          ))}
+         </div>
+ 
+-        <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
+-          <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
+-            <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
+-            <p>
+-              Managed by{" "}
+-              <a
+-                href="https://github.com/ahmed-3sker"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                3sker
+-              </a>{" "}
+-              &nbsp;
+-              <a
+-                href="https://github.com/hazorox"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                hazoro
+-              </a>
+-            </p>
+-          </div>
++        <div className="flex flex-col gap-3 border-t border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
++          <p aria-live="polite" className={`text-sm ${message ? (message.ok ? "text-green-700" : "text-red-600") : "text-slate-600"}`}>
++            {message?.text ?? `${roster.length - unmarked} of ${roster.length} students marked.`}
++          </p>
++          <button
++            onClick={save} disabled={saving || roster.length === 0}
++            className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
++          >
++            {saving ? "Saving..." : "Save Attendance"}
++          </button>
+         </div>
+-      </footer>
+-    </div>
++      </div>
++    </Layout>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/pages/Class_list.tsx b/frontend/src/pages/Class_list.tsx
+index b0e0053..37bc25f 100644
+--- a/frontend/src/pages/Class_list.tsx
++++ b/frontend/src/pages/Class_list.tsx
+@@ -1,150 +1,38 @@
+-
+-import { useNavigate } from "react-router-dom";
+-import stemIcon from "../assets/stem_icon.png";
+-
+-const SCHOOL_NAME = "STEM 6th of October";
+-const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
+-const classes = [
+-  "10A", "10B", "10C", "10D", "10E", "10F",
+-  "11A", "11B", "11C", "11D", "11E", "11F",
+-  "12A", "12B", "12C", "12D", "12E", "12F",
+-];
++import { Link } from "react-router-dom";
++import { getClasses } from "../api/endpoints";
++import Layout from "../components/Layout";
++import { useFetch } from "../lib/use_fetch";
+ 
+ export default function ClassList() {
+-  const navigate = useNavigate();
++  const { data: classes, loading, error } = useFetch("classes", getClasses);
+ 
+   return (
+-    <div className="flex min-h-screen flex-col bg-slate-100">
+-      <header className="bg-[#1a1a4e] shadow-lg">
+-        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+-         
+-          <div className="flex items-center gap-3">
+-            <div className="flex h-14 w-14 items-center justify-center rounded-lg font-bold uppercase tracking-wider text-white/60">
+-              <img  src={stemIcon} className="mx-auto" alt="logo" />
+-            </div>
+-
+-            <div className="leading-tight">
+-              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">
+-                {SCHOOL_NAME}
+-              </p>
+-              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
+-            </div>
+-          </div>
+-
+-          <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
+-            Attendance Management System
+-          </p>
+-        </nav>
+-      </header>
+-
+-      <div className="min-h-screen bg-slate-100 p-6 sm:p-10">
+-        
+-        <main className="flex-1 p-6 sm:p-10">
+-          <div className="mx-auto max-w-7xl">
+-            <h1 className="mb-2 text-3xl font-bold text-slate-900">
+-              School Classes
+-            </h1>
+-
+-            <p className="mb-8 text-slate-600">
+-              Select a class to view its attendance.
+-            </p>
+-
+-            <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+-              {classes.map((className) => (
+-                <button
+-                  key={className}
+-                  onClick={() =>
+-                   navigate(`/attendance/${className.toLowerCase()}`)
+-                  }
+-                  className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm transition hover:-translate-y-1 hover:border-[#1a1a4e] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#1a1a4e]"
+-                >
+-                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-xl bg-[#1a1a4e]/10 text-xl font-bold text-[#1a1a4e]">
+-                    {className}
+-                  </div>
+-
+-                  <h2 className="mt-4 font-semibold text-slate-800">
+-                    Class {className}
+-                  </h2>
+-
+-                  <p className="mt-1 text-sm text-[#1a1a4e]">
+-                    View Attendance →
+-                  </p>
+-                </button>
+-              ))}
++    <Layout>
++      <h1 className="mb-2 text-3xl font-bold text-slate-900">School Classes</h1>
++      <p className="mb-8 text-slate-600">Select a class to take attendance.</p>
++
++      {loading && <p className="text-slate-500">Loading classes...</p>}
++      {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-600">{error}</p>}
++      {classes?.length === 0 && (
++        <p className="text-slate-500">No classes yet. Run the seed script or add classes from the admin account.</p>
++      )}
++
++      <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
++        {classes?.map((c) => (
++          <Link
++            key={c._id}
++            to={`/attendance/${c._id}`}
++            className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm transition hover:-translate-y-1 hover:border-[#1a1a4e] hover:shadow-lg"
++          >
++            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-xl bg-[#1a1a4e]/10 text-xl font-bold text-[#1a1a4e]">
++              {c.name}
+             </div>
+-
+-            <p className="mt-8 text-sm text-slate-500">
+-              Total: {classes.length} classes
+-            </p>
+-          </div>
+-        </main>
+-
+-        
++            <h2 className="mt-4 font-semibold text-slate-800">Class {c.name}</h2>
++            <p className="mt-1 text-sm text-[#1a1a4e]">Take Attendance →</p>
++          </Link>
++        ))}
+       </div>
+-      <footer className="bg-[#0b0b1e] text-white">
+-          <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
+-            
+-            <div>
+-              <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
+-              <div className="grid grid-cols-2 gap-y-3 text-slate-400">
+-                <a href="https://www.stemegypt.net/" target="_blank" rel="noopener noreferrer">
+-                  School Website
+-                </a>
+-                <a href="https://web.facebook.com/STEM6october/?_rdc=1&_rdr#" target="_blank" rel="noopener noreferrer">
+-                  Facebook
+-                </a>
+-                <p>Contact Us</p>
+-                <p></p>
+-                <a href="mailto:counselor@stemegypt.edu.eg" target="_blank" rel="noopener noreferrer">
+-                  Email
+-                </a>
+-                <a href="https://wa.me/+201159114973" target="_blank" rel="noopener noreferrer">
+-                  Phone
+-                </a>
+-
+-
+-                <a href="../classes">
+-                  classes
+-                </a>
+-
+-
+-              </div>
+-            </div>
+-
+-            
+-
+-            <div>
+-              <h3 className="mb-6 text-2xl font-bold">About Us</h3>
+-              <div className="flex gap-4">
+-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg  text-[10px] uppercase text-white/50">
+-                  <img
+-                    src={stemIcon}
+-                    className="mx-auto"
+-                    alt="logo"
+-                  />
+-                </div>
+-                <div>
+-                  <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
+-                  <p className="mt-2 text-slate-400">
+-                    A public high school that provides top-notch education for
+-                    academically-motivated students.
+-                  </p>
+-                  <p className="mt-4 text-slate-400">Cosmic Village, 6th October, Egypt</p>
+-                </div>
+-              </div>
+-            </div>
+-          </div>
+-
+-      
+-            <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
+-              <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
+-                <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
+-                <p>
+-                  Managed by{<a href="https://github.com/ahmed-3sker" target="_blank"> 3sker</a>} &nbsp; {<a href="https://github.com/hazorox" target="_blank">hazoro</a>}
+-                </p>
+-              </div>
+-            </div>
+-        </footer>
+-    </div>
++      {classes && <p className="mt-8 text-sm text-slate-500">Total: {classes.length} classes</p>}
++    </Layout>
+   );
+ }
+diff --git a/frontend/src/pages/Login.tsx b/frontend/src/pages/Login.tsx
+index 316518e..b490d65 100644
+--- a/frontend/src/pages/Login.tsx
++++ b/frontend/src/pages/Login.tsx
+@@ -1,10 +1,12 @@
+ import { useState, type FormEvent } from "react";
+ import { Navigate, useNavigate } from "react-router-dom";
++import { errorMessage } from "../api/base";
+ import { useAuth } from "../components/auth_provider";
++import Layout from "../components/Layout";
+ import stemIcon from "../assets/stem_icon.png";
+ 
+-const SCHOOL_NAME = "STEM 6th of October";
+-const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
++const inputClass =
++  "w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#1a1a4e] focus:ring-2 focus:ring-[#1a1a4e]/20";
+ 
+ export default function Login() {
+   const { user, loading, login } = useAuth();
+@@ -16,120 +18,58 @@ export default function Login() {
+   const [submitting, setSubmitting] = useState(false);
+   const [message, setMessage] = useState("");
+ 
+-
+-  if (!loading && user) {
+-    return <Navigate to="/" replace />;
+-  }
++  if (!loading && user) return <Navigate to="/" replace />;
+ 
+   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+     e.preventDefault();
+     setMessage("");
+     setSubmitting(true);
+-
+     try {
+       await login(email.trim(), password);
+       navigate("/", { replace: true });
+-    } catch (err: any) {
+-      setMessage(
+-        err?.response?.data?.message ||
+-          "Invalid email or password. Please try again."
+-      );
++    } catch (err) {
++      setMessage(errorMessage(err));
+     } finally {
+       setSubmitting(false);
+     }
+   }
+ 
+   return (
+-    <div className="flex min-h-screen flex-col bg-slate-100">
+-      <header className="bg-[#1a1a4e] shadow-lg">
+-        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+-         
+-          <div className="flex items-center gap-3">
+-            <div className="flex h-14 w-14 items-center justify-center rounded-lg font-bold uppercase tracking-wider text-white/60">
+-              <img  src={stemIcon} className="mx-auto" alt="logo" />
+-            </div>
+-
+-            <div className="leading-tight">
+-              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">
+-                {SCHOOL_NAME}
+-              </p>
+-              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
+-            </div>
+-          </div>
+-
+-          <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
+-            Attendance Management System
+-          </p>
+-        </nav>
+-      </header>
+-
+-      <main className="flex flex-1 items-center justify-center px-4 py-12">
++    <Layout>
++      <div className="flex items-center justify-center py-8">
+         <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-xl sm:p-10">
+           <div className="mb-8 text-center">
+-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1a1a4e] text-2xl font-bold text-white">
++            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1a1a4e]">
+               <img src={stemIcon} alt="logo" />
+             </div>
+-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+-              Welcome back
+-            </h1>
+-            <p className="mt-2 text-sm text-slate-500">
+-              Enter your details to sign in to your account.
+-            </p>
++            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Welcome back</h1>
++            <p className="mt-2 text-sm text-slate-500">Enter your details to sign in to your account.</p>
+           </div>
+ 
+           <form onSubmit={handleSubmit} className="space-y-5">
+             <div>
+-              <label
+-                htmlFor="email"
+-                className="mb-2 block text-sm font-medium text-slate-700"
+-              >
++              <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
+                 Email address
+               </label>
+               <input
+-                id="email"
+-                name="email"
+-                type="email"
+-                value={email}
+-                onChange={(e) => setEmail(e.target.value)}
+-                placeholder="you@example.com"
+-                autoComplete="email"
+-                required
+-                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#1a1a4e] focus:ring-2 focus:ring-[#1a1a4e]/20"
++                id="email" type="email" value={email} required autoComplete="email"
++                onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com"
++                className={inputClass}
+               />
+             </div>
+ 
+             <div>
+-              <div className="mb-2 flex items-center justify-between gap-3">
+-                <label
+-                  htmlFor="password"
+-                  className="text-sm font-medium text-slate-700"
+-                >
+-                  Password
+-                </label>
+-                <a
+-                  href="#"
+-                  onClick={(e) => e.preventDefault()}
+-                  className="text-sm text-[#1a1a4e] hover:underline"
+-                >
+-                
+-                </a>
+-              </div>
+-
++              <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
++                Password
++              </label>
+               <div className="relative">
+                 <input
+-                  id="password"
+-                  name="password"
+-                  type={showPassword ? "text" : "password"}
+-                  value={password}
+-                  onChange={(e) => setPassword(e.target.value)}
+-                  placeholder="Enter your password"
+-                  autoComplete="current-password"
+-                  required
+-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 pr-20 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#1a1a4e] focus:ring-2 focus:ring-[#1a1a4e]/20"
++                  id="password" type={showPassword ? "text" : "password"} value={password} required
++                  autoComplete="current-password" onChange={(e) => setPassword(e.target.value)}
++                  placeholder="Enter your password" className={`${inputClass} pr-20`}
+                 />
+                 <button
+-                  type="button"
+-                  onClick={() => setShowPassword((s) => !s)}
++                  type="button" onClick={() => setShowPassword((s) => !s)}
+                   className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 hover:text-slate-900"
+                 >
+                   {showPassword ? "Hide" : "Show"}
+@@ -138,83 +78,20 @@ export default function Login() {
+             </div>
+ 
+             <button
+-              type="submit"
+-              disabled={submitting}
+-              className="w-full rounded-full bg-[#1a1a4e] py-3 font-semibold text-white transition hover:bg-[#2a2a70] focus:outline-none focus:ring-2 focus:ring-[#1a1a4e] focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
++              type="submit" disabled={submitting}
++              className="w-full rounded-full bg-[#1a1a4e] py-3 font-semibold text-white transition hover:bg-[#2a2a70] disabled:cursor-not-allowed disabled:opacity-60"
+             >
+               {submitting ? "Signing in..." : "Sign in"}
+             </button>
+ 
+             {message && (
+-              <p
+-                role="alert"
+-                className="rounded-lg bg-red-50 p-3 text-center text-sm text-red-600"
+-              >
++              <p role="alert" className="rounded-lg bg-red-50 p-3 text-center text-sm text-red-600">
+                 {message}
+               </p>
+             )}
+           </form>
+         </div>
+-      </main>
+-
+-      
+-      <footer className="bg-[#0b0b1e] text-white">
+-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
+-          
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
+-            <div className="grid grid-cols-2 gap-y-3 text-slate-400">
+-              <a href="https://www.stemegypt.net/" target="_blank" rel="noopener noreferrer">
+-                School Website
+-              </a>
+-              <a href="https://web.facebook.com/STEM6october/?_rdc=1&_rdr#" target="_blank" rel="noopener noreferrer">
+-                Facebook
+-              </a>
+-              <p>Contact Us</p>
+-              <p></p>
+-              <a href="mailto:counselor@stemegypt.edu.eg" target="_blank" rel="noopener noreferrer">
+-                Email
+-              </a>
+-              <a href="https://wa.me/+201159114973" target="_blank" rel="noopener noreferrer">
+-                Phone
+-              </a>
+-            </div>
+-          </div>
+-
+-          
+-
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">About Us</h3>
+-            <div className="flex gap-4">
+-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg  text-[10px] uppercase text-white/50">
+-                <img
+-                  src={stemIcon}
+-                  className="mx-auto"
+-                  alt="logo"
+-                />
+-              </div>
+-              <div>
+-                <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
+-                <p className="mt-2 text-slate-400">
+-                  A public high school that provides top-notch education for
+-                  academically-motivated students.
+-                </p>
+-                <p className="mt-4 text-slate-400">Cosmic Village, 6th October, Egypt</p>
+-              </div>
+-            </div>
+-          </div>
+-        </div>
+-
+-      
+-        <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
+-          <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
+-            <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
+-            <p>
+-              Managed by{<a href="https://github.com/ahmed-3sker" target="_blank"> 3sker</a>} &nbsp; {<a href="https://github.com/hazorox" target="_blank">hazoro</a>}
+-            </p>
+-          </div>
+-        </div>
+-      </footer>
+-    </div>
++      </div>
++    </Layout>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/pages/NotFound.tsx b/frontend/src/pages/NotFound.tsx
+index 77459b6..036f8d4 100644
+--- a/frontend/src/pages/NotFound.tsx
++++ b/frontend/src/pages/NotFound.tsx
+@@ -1,14 +1,16 @@
+-import React from 'react'
+-import { useNavigate } from "react-router-dom";
+-import stemIcon from "../assets/stem_icon.png";
+-
+-
+-const NotFound = () => {
+-  const navigate = useNavigate();
++import { Link } from "react-router-dom";
++import Layout from "../components/Layout";
+ 
++export default function NotFound() {
+   return (
+-    <div>NotFound</div>
+-  )
++    <Layout>
++      <div className="py-16 text-center">
++        <p className="text-6xl font-bold text-[#1a1a4e]">404</p>
++        <p className="mt-4 text-slate-600">That page doesn't exist.</p>
++        <Link to="/" className="mt-6 inline-block font-semibold text-blue-600 hover:text-blue-800">
++          Back to home
++        </Link>
++      </div>
++    </Layout>
++  );
+ }
+-
+-export default NotFound
+\ No newline at end of file
+diff --git a/frontend/src/pages/Students.tsx b/frontend/src/pages/Students.tsx
+new file mode 100644
+index 0000000..4dad044
+--- /dev/null
++++ b/frontend/src/pages/Students.tsx
+@@ -0,0 +1,139 @@
++import { useState, type FormEvent } from "react";
++import { Link } from "react-router-dom";
++import { errorMessage } from "../api/base";
++import {
++  addStudent, addStudentsBulk, deactivateStudent, getClasses, getStudents,
++} from "../api/endpoints";
++import { useAuth } from "../components/auth_provider";
++import Layout from "../components/Layout";
++import { useFetch } from "../lib/use_fetch";
++
++const inputClass =
++  "w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
++
++export default function Students() {
++  const { user } = useAuth();
++  const isAdmin = user?.role === "admin";
++
++  const classes = useFetch("classes", getClasses);
++  const [picked, setPicked] = useState("");
++  const classId = picked || classes.data?.[0]?._id || "";
++  const students = useFetch(classId || null, () => getStudents(classId));
++
++  const [name, setName] = useState("");
++  const [code, setCode] = useState("");
++  const [bulk, setBulk] = useState("");
++  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
++
++  async function run(action: () => Promise<string>) {
++    try {
++      setNotice({ ok: true, text: await action() });
++      students.reload();
++    } catch (err) {
++      setNotice({ ok: false, text: errorMessage(err) });
++    }
++  }
++
++  function onAdd(e: FormEvent) {
++    e.preventDefault();
++    run(async () => {
++      await addStudent({ name: name.trim(), studentId: code.trim(), classId });
++      setName("");
++      setCode("");
++      return "Student added.";
++    });
++  }
++
++  // one student per line: "studentId, name"
++  function onBulk(e: FormEvent) {
++    e.preventDefault();
++    const rows = bulk
++      .split("\n")
++      .map((line) => line.split(",").map((p) => p.trim()))
++      .filter((p) => p.length >= 2 && p[0] && p[1])
++      .map(([studentId, ...rest]) => ({ studentId, name: rest.join(", ") }));
++    if (rows.length === 0) {
++      setNotice({ ok: false, text: 'Use one student per line: "studentId, name"' });
++      return;
++    }
++    run(async () => {
++      const res = await addStudentsBulk(classId, rows);
++      setBulk("");
++      return `Added ${res.created} of ${rows.length} students.`;
++    });
++  }
++
++  function onRemove(id: string, studentName: string) {
++    if (!window.confirm(`Remove ${studentName}? Their past attendance is kept.`)) return;
++    run(async () => {
++      await deactivateStudent(id);
++      return "Student removed.";
++    });
++  }
++
++  return (
++    <Layout>
++      <h1 className="text-3xl font-bold text-slate-900">Students</h1>
++      <p className="mb-6 mt-2 text-slate-600">Pick a class, then open a student to see their attendance history.</p>
++
++      <div className="mb-6 max-w-xs rounded-xl border border-slate-200 bg-white p-5">
++        <label htmlFor="class" className="mb-2 block font-semibold text-slate-700">Class</label>
++        <select id="class" value={classId} onChange={(e) => setPicked(e.target.value)} className={inputClass}>
++          {classes.data?.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
++        </select>
++      </div>
++
++      {(classes.error || students.error) && (
++        <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-red-600">{classes.error ?? students.error}</p>
++      )}
++      {notice && (
++        <p role="status" className={`mb-4 rounded-lg p-3 ${notice.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
++          {notice.text}
++        </p>
++      )}
++
++      <div className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++        <div className="border-b border-slate-200 p-5">
++          <h2 className="text-xl font-bold text-slate-900">Roster</h2>
++          <p className="mt-1 text-sm text-slate-500">{students.data?.length ?? 0} students</p>
++        </div>
++        {students.loading && <p className="p-5 text-slate-500">Loading...</p>}
++        <div className="divide-y divide-slate-100">
++          {students.data?.map((s) => (
++            <div key={s._id} className="flex items-center justify-between gap-3 p-4 hover:bg-slate-50">
++              <Link to={`/students/${s._id}`} className="flex-1">
++                <p className="font-medium text-slate-900">{s.name}</p>
++                <p className="text-sm text-slate-500">{s.studentId}</p>
++              </Link>
++              {isAdmin && (
++                <button onClick={() => onRemove(s._id, s.name)} className="text-sm font-semibold text-red-600 hover:text-red-800">
++                  Remove
++                </button>
++              )}
++            </div>
++          ))}
++        </div>
++      </div>
++
++      {isAdmin && classId && (
++        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
++          <form onSubmit={onAdd} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++            <h2 className="text-xl font-bold text-slate-900">Add one student</h2>
++            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" required className={inputClass} />
++            <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Student ID" required className={inputClass} />
++            <button className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700">Add student</button>
++          </form>
++
++          <form onSubmit={onBulk} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++            <h2 className="text-xl font-bold text-slate-900">Paste a list</h2>
++            <textarea
++              value={bulk} onChange={(e) => setBulk(e.target.value)} rows={5}
++              placeholder={"10A-01, First Student\n10A-02, Second Student"} className={inputClass}
++            />
++            <button className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700">Add all</button>
++          </form>
++        </div>
++      )}
++    </Layout>
++  );
++}
+diff --git a/frontend/src/pages/Users.tsx b/frontend/src/pages/Users.tsx
+new file mode 100644
+index 0000000..dd26b51
+--- /dev/null
++++ b/frontend/src/pages/Users.tsx
+@@ -0,0 +1,107 @@
++import { useState, type FormEvent } from "react";
++import { errorMessage } from "../api/base";
++import { createUser, getUsers, updateUser } from "../api/endpoints";
++import { useAuth, type Role } from "../components/auth_provider";
++import Layout from "../components/Layout";
++import { useFetch } from "../lib/use_fetch";
++
++const inputClass =
++  "w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
++
++export default function Users() {
++  const { user: me } = useAuth();
++  const users = useFetch("users", getUsers);
++
++  const [name, setName] = useState("");
++  const [email, setEmail] = useState("");
++  const [password, setPassword] = useState("");
++  const [role, setRole] = useState<Role>("teacher");
++  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
++
++  async function run(action: () => Promise<string>) {
++    try {
++      setNotice({ ok: true, text: await action() });
++      users.reload();
++    } catch (err) {
++      setNotice({ ok: false, text: errorMessage(err) });
++    }
++  }
++
++  function onCreate(e: FormEvent) {
++    e.preventDefault();
++    run(async () => {
++      await createUser({ name: name.trim(), email: email.trim(), password, role });
++      setName("");
++      setEmail("");
++      setPassword("");
++      return "User created.";
++    });
++  }
++
++  return (
++    <Layout>
++      <h1 className="text-3xl font-bold text-slate-900">Users</h1>
++      <p className="mb-6 mt-2 text-slate-600">Create staff accounts and turn them on or off.</p>
++
++      {(users.error) && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-red-600">{users.error}</p>}
++      {notice && (
++        <p role="status" className={`mb-4 rounded-lg p-3 ${notice.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
++          {notice.text}
++        </p>
++      )}
++
++      <div className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++        <div className="overflow-x-auto">
++          <table className="w-full text-left">
++            <thead className="bg-slate-50 text-sm text-slate-600">
++              <tr>
++                <th className="px-5 py-4">Name</th>
++                <th className="px-5 py-4">Email</th>
++                <th className="px-5 py-4">Role</th>
++                <th className="px-5 py-4">Status</th>
++                <th className="px-5 py-4" />
++              </tr>
++            </thead>
++            <tbody className="divide-y divide-slate-100">
++              {users.data?.map((u) => (
++                <tr key={u._id} className="hover:bg-slate-50">
++                  <td className="px-5 py-4 font-medium text-slate-900">{u.name}</td>
++                  <td className="px-5 py-4 text-slate-600">{u.email}</td>
++                  <td className="px-5 py-4 capitalize text-slate-600">{u.role}</td>
++                  <td className="px-5 py-4">
++                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${u.isActive ? "bg-green-100 text-green-800" : "bg-slate-200 text-slate-600"}`}>
++                      {u.isActive ? "Active" : "Disabled"}
++                    </span>
++                  </td>
++                  <td className="px-5 py-4 text-right">
++                    {u._id !== me?._id && (
++                      <button
++                        onClick={() => run(async () => { await updateUser(u._id, { isActive: !u.isActive }); return "User updated."; })}
++                        className="text-sm font-semibold text-blue-600 hover:text-blue-800"
++                      >
++                        {u.isActive ? "Disable" : "Enable"}
++                      </button>
++                    )}
++                  </td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++      </div>
++
++      <form onSubmit={onCreate} className="max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++        <h2 className="text-xl font-bold text-slate-900">New user</h2>
++        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" required className={inputClass} />
++        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required className={inputClass} />
++        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (8+ characters)" minLength={8} required className={inputClass} />
++        <select value={role} onChange={(e) => setRole(e.target.value as Role)} className={inputClass}>
++          <option value="teacher">Teacher</option>
++          <option value="principal">Principal</option>
++          <option value="admin">Admin</option>
++        </select>
++        <button className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700">Create user</button>
++      </form>
++    </Layout>
++  );
++}
+diff --git a/frontend/src/pages/dashboard.tsx b/frontend/src/pages/dashboard.tsx
+index e2bf78c..79e5a58 100644
+--- a/frontend/src/pages/dashboard.tsx
++++ b/frontend/src/pages/dashboard.tsx
+@@ -1,9 +1,55 @@
+-import React from 'react'
++import { Link } from "react-router-dom";
++import { getReportsForDate } from "../api/endpoints";
++import Layout from "../components/Layout";
++import { LABEL, SESSIONS, STATUSES, buildLines, countLines, percent, tile, todayISO } from "../lib/attendance";
++import { useFetch } from "../lib/use_fetch";
++
++export default function Dashboard() {
++  const date = todayISO();
++  const { data, loading, error } = useFetch(date, () => getReportsForDate(date));
++  const reports = data ?? [];
++
++  const lines = buildLines(reports);
++  const { counts, total, totalAbsent } = countLines(lines, SESSIONS.length);
++  const classes = Array.from(new Set(reports.map((r) => r.className))).sort();
++  const latestSession = reports.reduce((max, r) => Math.max(max, r.session), 0);
+ 
+-const DashBoard = () => {
+   return (
+-    <div>NotFound</div>
+-  )
+-}
++    <Layout>
++      <p className="text-sm font-semibold uppercase tracking-widest text-[#1a1a4e]">Dashboard</p>
++      <h1 className="mt-2 text-3xl font-bold text-slate-900">Today · {date}</h1>
+ 
+-export default DashBoard
+\ No newline at end of file
++      {loading && <p className="mt-6 text-slate-500">Loading...</p>}
++      {error && <p role="alert" className="mt-6 rounded-lg bg-red-50 p-3 text-red-600">{error}</p>}
++
++      {!loading && !error && reports.length === 0 && (
++        <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
++          <p className="text-lg font-semibold text-slate-800">No attendance recorded today yet</p>
++        </div>
++      )}
++
++      {reports.length > 0 && (
++        <>
++          <div className="my-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
++            {STATUSES.map((s) => (
++              <div key={s} className={`rounded-xl p-4 ${tile[s]}`}>
++                <p className="text-sm font-medium">{LABEL[s]}</p>
++                <p className="mt-1 text-2xl font-bold">{counts[s]}</p>
++                <p className="text-xs opacity-80">{percent(counts[s], total)} of students</p>
++              </div>
++            ))}
++            <div className="rounded-xl bg-[#1a1a4e] p-4 text-white">
++              <p className="text-sm font-medium text-white/80">Classes reported</p>
++              <p className="mt-1 text-2xl font-bold">{classes.length}</p>
++              <p className="text-xs text-white/70">through session {latestSession}</p>
++            </div>
++          </div>
++          <p className="mb-6 text-slate-600">
++            {totalAbsent} students absent or excused so far today.{" "}
++            <Link to="/reports" className="font-semibold text-blue-600 hover:text-blue-800">Open full report →</Link>
++          </p>
++        </>
++      )}
++    </Layout>
++  );
++}
+diff --git a/frontend/src/pages/home.tsx b/frontend/src/pages/home.tsx
+index 8f8e851..82c108d 100644
+--- a/frontend/src/pages/home.tsx
++++ b/frontend/src/pages/home.tsx
+@@ -1,42 +1,29 @@
+ import { Link } from "react-router-dom";
+-import { useAuth, type Role } from "../components/auth_provider";
+-import RoleBadge from "../components/RoleBadge";
+-
+-const links: { to: string; label: string; roles: Role[] }[] = [
+-  { to: "/dashboard",  label: "Dashboard",  roles: ["admin", "principal"] },
+-  { to: "/attendance", label: "Attendance", roles: ["teacher"] },
+-  { to: "/student_dashboard",   label: "Students",   roles: ["admin", "teacher", "principal"] },
+-  { to: "/excuses",    label: "Excuses",    roles: ["admin", "teacher"] },
+-  { to: "/reports",    label: "Reports",    roles: ["admin", "principal"] },
+-  { to: "/classes",    label: "Classes",    roles: ["admin"] },
+-  { to: "/users",      label: "Users",      roles: ["admin"] },
+-   { to: "/attendance",      label: "Attendance",      roles: ["admin"] }
+-  
+-];
++import { useAuth } from "../components/auth_provider";
++import Layout from "../components/Layout";
++import { LINKS } from "../lib/nav";
+ 
+ export default function Home() {
+-  const { user, logout } = useAuth();
++  const { user } = useAuth();
+   if (!user) return null; // ProtectedRoute already guarantees a user
++  const links = LINKS.filter((l) => l.roles.includes(user.role));
+ 
+   return (
+-    <div style={{ padding: 24 }}>
+-      <h1>
+-        Welcome, {user.name} <RoleBadge />
+-      </h1>
+-
+-      {user.role === "admin" && <p>You have full admin access.</p>}
+-
+-      <nav style={{ display: "grid", gap: 8, maxWidth: 240, margin: "16px 0" }}>
+-        {links
+-          .filter((l) => l.roles.includes(user.role))
+-          .map((l) => (
+-            <Link key={l.to} to={l.to}>
+-              {l.label}
+-            </Link>
+-          ))}
+-      </nav>
+-
+-      <button onClick={logout}>Log out</button>
+-    </div>
++    <Layout>
++      <h1 className="text-3xl font-bold text-slate-900">Welcome, {user.name}</h1>
++      <p className="mb-8 mt-2 text-slate-600">What would you like to do?</p>
++      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
++        {links.map((l) => (
++          <Link
++            key={l.to}
++            to={l.to}
++            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:border-[#1a1a4e] hover:shadow-lg"
++          >
++            <h2 className="text-lg font-semibold text-slate-900">{l.label}</h2>
++            <p className="mt-1 text-sm text-slate-500">{l.description}</p>
++          </Link>
++        ))}
++      </div>
++    </Layout>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/pages/reports.tsx b/frontend/src/pages/reports.tsx
+index 2905571..86d3963 100644
+--- a/frontend/src/pages/reports.tsx
++++ b/frontend/src/pages/reports.tsx
+@@ -1,577 +1,200 @@
+-import { useMemo, useState } from "react";
+-import stemIcon from "../assets/stem_icon.png";
+-
+-
+-const SCHOOL_NAME = "STEM 6th of October";
+-const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
+-
+-
+-type Status = "Present" | "Absent" | "Excused";
+-
+-type StudentRecord = {
+-  studentId: string;
+-  name: string;
+-  status: Status;
+-};
+-
+-type AttendanceData = Record<
+-  string, 
+-  Record<
+-    string,
+-    { sessions: Record<string, { students: StudentRecord[] }> }
+-  >
+->;
+- 
+-const sampleStudents10A: StudentRecord[] = [
+-  { studentId: "S01", name: "Student 01", status: "Present" },
+-  { studentId: "S02", name: "Student 02", status: "Absent" },
+-  { studentId: "S03", name: "Student 03", status: "Excused" },
+-];
+-
+-const sampleStudents10B: StudentRecord[] = [
+-  { studentId: "S01", name: "Student 01", status: "Present" },
+-  { studentId: "S02", name: "Student 02", status: "Present" },
+-  { studentId: "S03", name: "Student 03", status: "Excused" },
+-];
+-
+-const emptySessions = () =>
+-  Object.fromEntries(
+-    ["1", "2", "3", "4", "5"].map((s) => [s, { students: [] as StudentRecord[] }])
+-  );
+-
+-
+-const attendanceData: AttendanceData = {
+-  "2026-10-27": {
+-    "10A": {
+-      sessions: Object.fromEntries(
+-        ["1", "2", "3", "4", "5"].map((s) => [s, { students: sampleStudents10A }])
+-      ),
+-    },
+-    "10B": {
+-      sessions: Object.fromEntries(
+-        ["1", "2", "3", "4", "5"].map((s) => [s, { students: sampleStudents10B }])
+-      ), },
+-  },
+-  "2026-10-28": {
+-    "10A": { sessions: emptySessions() },
+-  },
+-};
+-
+-
+-const STATUSES: Status[] = ["Present", "Absent", "Excused"];
+-const SESSION_NUMBERS = ["1", "2", "3", "4", "5"];
+-const LAST_SESSION = SESSION_NUMBERS.length;
+-
+-const statusBadge: Record<Status, string> = {
+-  Present: "bg-green-100 text-green-800",
+-  Absent: "bg-red-100 text-red-800",
+-  Excused: "bg-blue-100 text-blue-800",
+-};
+-
+-const summaryStyle: Record<Status, string> = {
+-  Present: "bg-green-50 text-green-700",
+-  Absent: "bg-red-50 text-red-700",
+-  Excused: "bg-blue-50 text-blue-700",
+-};
+-
+-type StudentLine = {
+-  className: string;
+-  studentId: string;
+-  name: string;
+-  sessions: Record<string, Status>;
+-};
+-
+-function dayStatus(
+-  sessions: Record<string, Status>,
+-  upTo: number
+-): Status | null {
+-  const seen = SESSION_NUMBERS.filter((n) => Number(n) <= upTo)
+-    .map((n) => sessions[n])
+-    .filter(Boolean) as Status[];
+-
+-  if (seen.length === 0) return null;
+-  if (seen.includes("Absent")) return "Absent";
+-  if (seen.includes("Excused")) return "Excused";
+-  return "Present";
+-}
+-
+-function countStudents(lines: StudentLine[], upTo: number) {
+-  const counts: Record<Status, number> = {
+-    Present: 0,
+-    Absent: 0,
+-    Excused: 0,
+-  };
+-  let total = 0;
+-
+-  lines.forEach((line) => {
+-    const status = dayStatus(line.sessions, upTo);
+-    if (status) {
+-      counts[status] += 1;
+-      total += 1;
+-    }
+-  });
+-const totalAbsent = counts.Absent + counts.Excused;
+-
+-return { counts, total, totalAbsent };
+-}
+-
+-function percent(part: number, total: number) {
+-  return total === 0 ? "—" : `${Math.round((part / total) * 100)}%`;
+-}
++import { useState } from "react";
++import { Link } from "react-router-dom";
++import { getReportDates, getReportsForDate } from "../api/endpoints";
++import Layout from "../components/Layout";
++import {
++  LABEL, SESSIONS, STATUSES, badge, buildLines, countLines, lineStatus, percent, tile,
++} from "../lib/attendance";
++import { useFetch } from "../lib/use_fetch";
++
++const inputClass =
++  "w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-[#1a1a4e] focus:ring-2 focus:ring-[#1a1a4e]/20";
+ 
+ export default function Reports() {
+-  const data = attendanceData;
+-
+-  const dates = useMemo(() => Object.keys(data).sort().reverse(), [data]);
+-  const defaultDate = useMemo(() => {
+-    const withRecords = dates.find((d) =>
+-      Object.values(data[d]).some((c) =>
+-        Object.values(c.sessions).some((s) => s.students.length > 0)
+-      )
+-    );
+-    return withRecords ?? dates[0] ?? "";
+-  }, [dates, data]);
+-
+-  const [date, setDate] = useState(defaultDate);
++  const dates = useFetch("dates", getReportDates);
++  const [pickedDate, setPickedDate] = useState("");
++  const date = pickedDate || dates.data?.[0] || "";
+   const [classFilter, setClassFilter] = useState("all");
+   const [sessionFilter, setSessionFilter] = useState("all");
+-  const upTo = sessionFilter === "all" ? LAST_SESSION : Number(sessionFilter);
++  const upTo = sessionFilter === "all" ? SESSIONS.length : Number(sessionFilter);
+ 
+-  const classesForDate = useMemo(
+-    () => Object.keys(data[date] ?? {}).sort(),
+-    [data, date]
+-  );
+-
+-  function changeDate(newDate: string) {
+-    setDate(newDate);
+-    setClassFilter("all");
+-  }
+-  const studentLines: StudentLine[] = useMemo(() => {
+-    const map = new Map<string, StudentLine>();
+-    const day = data[date] ?? {};
+-
+-    Object.entries(day).forEach(([className, classData]) => {
+-      if (classFilter !== "all" && classFilter !== className) return;
++  const reports = useFetch(date || null, () => getReportsForDate(date));
++  const all = reports.data ?? [];
+ 
+-      Object.entries(classData.sessions).forEach(([session, sessionData]) => {
+-        sessionData.students.forEach((student) => {
+-          const key = `${className}-${student.studentId}`;
+-          if (!map.has(key)) {
+-            map.set(key, {
+-              className,
+-              studentId: student.studentId,
+-              name: student.name,
+-              sessions: {},
+-            });
+-          }
+-          map.get(key)!.sessions[session] = student.status;
+-        });
+-      });
+-    });
++  const classNames = Array.from(new Set(all.map((r) => r.className))).sort();
++  const lines = buildLines(all, classFilter);
++  const { counts, total, totalAbsent } = countLines(lines, upTo);
++  const visibleSessions = SESSIONS.filter((n) => n <= upTo);
++  const absentBySession = visibleSessions.map((n) => ({ session: n, absent: countLines(lines, n).totalAbsent }));
+ 
+-    return Array.from(map.values()).sort(
+-      (a, b) =>
+-        a.className.localeCompare(b.className) ||
+-        a.studentId.localeCompare(b.studentId)
+-    );
+-  }, [data, date, classFilter]);
+-  const { counts: totals, total: totalStudents, totalAbsent } = useMemo(
+-    () => countStudents(studentLines, upTo),
+-    [studentLines, upTo]
+-  );
+-  const absentBySession = useMemo(
+-    () =>
+-      SESSION_NUMBERS.filter((n) => Number(n) <= upTo).map((n) => ({
+-        session: n,
+-        absent: countStudents(studentLines, Number(n)).totalAbsent,
+-      })),
+-    [studentLines, upTo]
+-  );
+-
+-  const classSummary = useMemo(() => {
+-    const names = Array.from(new Set(studentLines.map((s) => s.className))).sort();
+-    return names.map((name) => {
+-      const lines = studentLines.filter((s) => s.className === name);
+-      const { counts, total, totalAbsent } = countStudents(lines, upTo);
+-      return { name, total, counts, totalAbsent };
+-    });
+-  }, [studentLines, upTo]);
+-
+-  const visibleSessions = SESSION_NUMBERS.filter((n) => Number(n) <= upTo);
++  const byClass = Array.from(new Set(lines.map((l) => l.className))).sort().map((name) => {
++    const classLines = lines.filter((l) => l.className === name);
++    return { name, ...countLines(classLines, upTo) };
++  });
+ 
+-  const inputClass =
+-    "w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-[#1a1a4e] focus:ring-2 focus:ring-[#1a1a4e]/20";
+   return (
+-    <div className="flex min-h-screen flex-col bg-slate-100">
+-      <header className="bg-[#1a1a4e] shadow-lg">
+-        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+-         
+-          <div className="flex items-center gap-3">
+-            <div className="flex h-14 w-14 items-center justify-center rounded-lg font-bold uppercase tracking-wider text-white/60">
+-              <img  src={stemIcon} className="mx-auto" alt="logo" />
+-            </div>
++    <Layout>
++      <p className="text-sm font-semibold uppercase tracking-widest text-[#1a1a4e]">Attendance Reports</p>
++      <h1 className="mt-2 text-3xl font-bold text-slate-900">Daily Attendance Report</h1>
++      <p className="mb-8 mt-2 text-slate-600">
++        Absences build up session by session. The last session shows the day's total.
++      </p>
++
++      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
++        <div className="rounded-xl border border-slate-200 bg-white p-5">
++          <label htmlFor="report-date" className="mb-2 block font-semibold text-slate-700">Date</label>
++          <select
++            id="report-date" value={date} className={inputClass}
++            onChange={(e) => { setPickedDate(e.target.value); setClassFilter("all"); }}
++          >
++            {dates.data?.map((d) => <option key={d} value={d}>{d}</option>)}
++          </select>
++        </div>
++        <div className="rounded-xl border border-slate-200 bg-white p-5">
++          <label htmlFor="report-class" className="mb-2 block font-semibold text-slate-700">Class</label>
++          <select id="report-class" value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className={inputClass}>
++            <option value="all">All classes</option>
++            {classNames.map((c) => <option key={c} value={c}>Class {c}</option>)}
++          </select>
++        </div>
++        <div className="rounded-xl border border-slate-200 bg-white p-5">
++          <label htmlFor="report-session" className="mb-2 block font-semibold text-slate-700">Up to session</label>
++          <select id="report-session" value={sessionFilter} onChange={(e) => setSessionFilter(e.target.value)} className={inputClass}>
++            <option value="all">Full day (all sessions)</option>
++            {SESSIONS.map((s) => <option key={s} value={s}>Through session {s}</option>)}
++          </select>
++        </div>
++      </div>
+ 
+-            <div className="leading-tight">
+-              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">
+-                {SCHOOL_NAME}
+-              </p>
+-              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
++      {(dates.error || reports.error) && (
++        <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-red-600">{dates.error ?? reports.error}</p>
++      )}
++      {(dates.loading || reports.loading) && <p className="text-slate-500">Loading...</p>}
++
++      {!dates.loading && !reports.loading && total === 0 && (
++        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
++          <p className="text-lg font-semibold text-slate-800">No attendance recorded</p>
++          <p className="mt-1 text-slate-500">Nothing has been saved for this date, class and session yet.</p>
++        </div>
++      )}
++
++      {total > 0 && (
++        <>
++          <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
++            {STATUSES.map((s) => (
++              <div key={s} className={`rounded-xl p-4 ${tile[s]}`}>
++                <p className="text-sm font-medium">{s === "absent" ? "Absent" : LABEL[s]}</p>
++                <p className="mt-1 text-2xl font-bold">{counts[s]}</p>
++                <p className="text-xs opacity-80">{percent(counts[s], total)} of students</p>
++              </div>
++            ))}
++            <div className="rounded-xl bg-[#1a1a4e] p-4 text-white">
++              <p className="text-sm font-medium text-white/80">Total Students</p>
++              <p className="mt-1 text-2xl font-bold">{total}</p>
++              <p className="text-xs text-white/70">{percent(counts.present, total)} present all day</p>
+             </div>
+           </div>
+ 
+-          <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
+-            Attendance Management System
+-          </p>
+-        </nav>
+-      </header>
+-
+-      <main className="flex-1 p-4 sm:p-8">
+-        <div className="mx-auto max-w-7xl">
+-          <div className="mb-8">
+-            <p className="text-sm font-semibold uppercase tracking-widest text-[#1a1a4e]">
+-              Attendance Reports
+-            </p>
+-            <h1 className="mt-2 text-3xl font-bold text-slate-900">
+-              Daily Attendance Report
+-            </h1>
+-            <p className="mt-2 text-slate-600">
+-              Absences build up session by session. The last session shows the
+-              day's total.
++          <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++            <h2 className="text-xl font-bold text-slate-900">Absences by Session</h2>
++            <p className="mt-1 text-sm text-slate-500">
++              Students absent or excused so far ({totalAbsent} in total). Each session adds to the previous one.
+             </p>
+-          </div>
+-          <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+-              <label htmlFor="report-date" className="mb-2 block font-semibold text-slate-700">
+-                Date
+-              </label>
+-              <select
+-                id="report-date"
+-                value={date}
+-                onChange={(e) => changeDate(e.target.value)}
+-                className={inputClass}
+-              >
+-                {dates.map((d) => (
+-                  <option key={d} value={d}>
+-                    {d}
+-                  </option>
+-                ))}
+-              </select>
++            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
++              {absentBySession.map((item, i) => {
++                const isLast = i === absentBySession.length - 1;
++                return (
++                  <div key={item.session} className={`rounded-xl p-4 ${isLast ? "bg-red-600 text-white" : "bg-red-50 text-red-700"}`}>
++                    <p className="text-sm font-medium">{isLast ? `Session ${item.session} · Total` : `Session ${item.session}`}</p>
++                    <p className="mt-1 text-2xl font-bold">{item.absent}</p>
++                  </div>
++                );
++              })}
+             </div>
++          </div>
+ 
+-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+-              <label htmlFor="report-class" className="mb-2 block font-semibold text-slate-700">
+-                Class
+-              </label>
+-              <select
+-                id="report-class"
+-                value={classFilter}
+-                onChange={(e) => setClassFilter(e.target.value)}
+-                className={inputClass}
+-              >
+-                <option value="all">All classes</option>
+-                {classesForDate.map((c) => (
+-                  <option key={c} value={c}>
+-                    Class {c}
+-                  </option>
+-                ))}
+-              </select>
++          <div className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++            <div className="border-b border-slate-200 p-5">
++              <h2 className="text-xl font-bold text-slate-900">By Class</h2>
+             </div>
+-
+-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+-              <label htmlFor="report-session" className="mb-2 block font-semibold text-slate-700">
+-                Up to session
+-              </label>
+-              <select
+-                id="report-session"
+-                value={sessionFilter}
+-                onChange={(e) => setSessionFilter(e.target.value)}
+-                className={inputClass}
+-              >
+-                <option value="all">Full day (all sessions)</option>
+-                {SESSION_NUMBERS.map((s) => (
+-                  <option key={s} value={s}>
+-                    Through session {s}
+-                  </option>
+-                ))}
+-              </select>
++            <div className="overflow-x-auto">
++              <table className="w-full text-left">
++                <thead className="bg-slate-50 text-sm text-slate-600">
++                  <tr>
++                    <th className="px-5 py-4">Class</th>
++                    <th className="px-5 py-4">Students</th>
++                    {STATUSES.map((s) => <th key={s} className="px-5 py-4">{LABEL[s]}</th>)}
++                    <th className="px-5 py-4">Present Rate</th>
++                  </tr>
++                </thead>
++                <tbody className="divide-y divide-slate-100">
++                  {byClass.map((c) => (
++                    <tr key={c.name} className="hover:bg-slate-50">
++                      <td className="px-5 py-4 font-semibold text-slate-900">{c.name}</td>
++                      <td className="px-5 py-4 text-slate-600">{c.total}</td>
++                      {STATUSES.map((s) => <td key={s} className="px-5 py-4 text-slate-700">{c.counts[s]}</td>)}
++                      <td className="px-5 py-4 font-semibold text-[#1a1a4e]">{percent(c.counts.present, c.total)}</td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
+             </div>
+           </div>
+ 
+-          {totalStudents === 0 ? (
+-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+-              <p className="text-lg font-semibold text-slate-800">
+-                No attendance recorded
+-              </p>
+-              <p className="mt-1 text-slate-500">
+-                Nothing has been saved for this date, class and session yet.
+-              </p>
++          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++            <div className="border-b border-slate-200 p-5">
++              <h2 className="text-xl font-bold text-slate-900">Students</h2>
++              <p className="mt-1 text-sm text-slate-500">{lines.length} students</p>
+             </div>
+-          ) : (
+-            <>
+-              <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+-                {STATUSES.map((status) => (
+-                  <div key={status} className={`rounded-xl p-4 ${summaryStyle[status]}`}>
+-                    <p className="text-sm font-medium">
+-                      {status === "Absent" ? "Total Absent" : status}
+-                    </p>
+-                    <p className="mt-1 text-2xl font-bold">{totals[status]}</p>
+-                    <p className="text-xs opacity-80">
+-                      {percent(totals[status], totalStudents)} of students
+-                    </p>
+-                  </div>
+-                ))}
+-
+-                <div className="rounded-xl bg-[#1a1a4e] p-4 text-white">
+-                  <p className="text-sm font-medium text-white/80">Total Students</p>
+-                  <p className="mt-1 text-2xl font-bold">{totalStudents}</p>
+-                  <p className="text-xs text-white/70">
+-                    {percent(totals.Present, totalStudents)} present all day
+-                  </p>
+-                </div>
+-              </div>
+-              <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+-                <h2 className="text-xl font-bold text-slate-900">
+-                  Absences by Session
+-                </h2>
+-                <p className="mt-1 text-sm text-slate-500">
+-                  Students absent so far. Each session adds to the previous one.
+-                </p>
+-                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+-                  {absentBySession.map((item, index) => {
+-                    const isLast = index === absentBySession.length - 1;
++            <div className="overflow-x-auto">
++              <table className="w-full text-left">
++                <thead className="bg-slate-50 text-sm text-slate-600">
++                  <tr>
++                    <th className="px-5 py-4">ID</th>
++                    <th className="px-5 py-4">Student</th>
++                    <th className="px-5 py-4">Class</th>
++                    {visibleSessions.map((n) => <th key={n} className="px-5 py-4 text-center">S{n}</th>)}
++                    <th className="px-5 py-4 text-center">Overall</th>
++                  </tr>
++                </thead>
++                <tbody className="divide-y divide-slate-100">
++                  {lines.map((l) => {
++                    const overall = lineStatus(l, upTo);
+                     return (
+-                      <div
+-                        key={item.session}
+-                        className={`rounded-xl p-4 ${
+-                          isLast
+-                            ? "bg-red-600 text-white"
+-                            : "bg-red-50 text-red-700"
+-                        }`}
+-                      >
+-                        <p className="text-sm font-medium">
+-                          {isLast
+-                            ? `Session ${item.session} · Total`
+-                            : `Session ${item.session}`}
+-                        </p>
+-                        <p className="mt-1 text-2xl font-bold">{item.absent}</p>
+-                      </div>
+-                    );
+-                  })}
+-                </div>
+-              </div>
+-              <div className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+-                <div className="border-b border-slate-200 p-5">
+-                  <h2 className="text-xl font-bold text-slate-900">By Class</h2>
+-                  <p className="mt-1 text-sm text-slate-500">
+-                    {date} ·{" "}
+-                    {sessionFilter === "all"
+-                      ? "Full day"
+-                      : `Through session ${sessionFilter}`}
+-                  </p>
+-                </div>
+-                <div className="overflow-x-auto">
+-                  <table className="w-full text-left">
+-                    <thead className="bg-slate-50 text-sm text-slate-600">
+-                      <tr>
+-                        <th className="px-5 py-4">Class</th>
+-                        <th className="px-5 py-4">Students</th>
+-                        {STATUSES.map((s) => (
+-                          <th key={s} className="px-5 py-4">
+-                            {s}
+-                          </th>
+-                        ))}
+-                        <th className="px-5 py-4">Present Rate</th>
+-                      </tr>
+-                    </thead>
+-                    <tbody className="divide-y divide-slate-100">
+-                      {classSummary.map((c) => (
+-                        <tr key={c.name} className="hover:bg-slate-50">
+-                          <td className="px-5 py-4 font-semibold text-slate-900">
+-                            {c.name}
+-                          </td>
+-                          <td className="px-5 py-4 text-slate-600">{c.total}</td>
+-                          {STATUSES.map((s) => (
+-                            <td key={s} className="px-5 py-4 text-slate-700">
+-                              {c.counts[s]}
++                      <tr key={`${l.className}-${l.code}`} className="hover:bg-slate-50">
++                        <td className="px-5 py-4 text-slate-500">{l.code}</td>
++                        <td className="px-5 py-4 font-medium text-slate-900">
++                          <Link to={`/students/${l.studentId}`} className="hover:underline">{l.name}</Link>
++                        </td>
++                        <td className="px-5 py-4 text-slate-600">{l.className}</td>
++                        {visibleSessions.map((n) => {
++                          const s = l.sessions[n];
++                          return (
++                            <td key={n} className="px-5 py-4 text-center">
++                              {s ? (
++                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge[s]}`}>{LABEL[s]}</span>
++                              ) : (
++                                <span className="text-slate-300">-</span>
++                              )}
+                             </td>
+-                          ))}
+-                          <td className="px-5 py-4 font-semibold text-[#1a1a4e]">
+-                            {percent(c.counts.Present, c.total)}
+-                          </td>
+-                        </tr>
+-                      ))}
+-                    </tbody>
+-                  </table>
+-                </div>
+-              </div>
+-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+-                <div className="border-b border-slate-200 p-5">
+-                  <h2 className="text-xl font-bold text-slate-900">Students</h2>
+-                  <p className="mt-1 text-sm text-slate-500">
+-                    {studentLines.length} students
+-                  </p>
+-                </div>
+-                <div className="divide-y divide-slate-100 md:hidden">
+-                  {studentLines.map((s) => {
+-                    const overall = dayStatus(s.sessions, upTo);
+-                    return (
+-                      <div key={`${s.className}-${s.studentId}`} className="p-4">
+-                        <div className="mb-3 flex items-center justify-between gap-3">
+-                          <div>
+-                            <p className="font-medium text-slate-900">{s.name}</p>
+-                            <span className="text-sm text-slate-500">
+-                              {s.className} · {s.studentId}
+-                            </span>
+-                          </div>
+-                          {overall && (
+-                            <span
+-                              className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge[overall]}`}
+-                            >
+-                              {overall}
+-                            </span>
++                          );
++                        })}
++                        <td className="px-5 py-4 text-center">
++                          {overall ? (
++                            <span className={`rounded-full px-3 py-1 text-xs font-bold ${badge[overall]}`}>{LABEL[overall]}</span>
++                          ) : (
++                            <span className="text-slate-300">-</span>
+                           )}
+-                        </div>
+-                        <div className="flex flex-wrap gap-2">
+-                          {visibleSessions.map((n) => {
+-                            const status = s.sessions[n];
+-                            return (
+-                              <span
+-                                key={n}
+-                                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+-                                  status
+-                                    ? statusBadge[status]
+-                                    : "bg-slate-100 text-slate-400"
+-                                }`}
+-                              >
+-                                S{n}: {status ?? "—"}
+-                              </span>
+-                            );
+-                          })}
+-                        </div>
+-                      </div>
++                        </td>
++                      </tr>
+                     );
+                   })}
+-                </div>
+-                <div className="hidden overflow-x-auto md:block">
+-                  <table className="w-full text-left">
+-                    <thead className="bg-slate-50 text-sm text-slate-600">
+-                      <tr>
+-                        <th className="px-5 py-4">ID</th>
+-                        <th className="px-5 py-4">Student</th>
+-                        <th className="px-5 py-4">Class</th>
+-                        {visibleSessions.map((n) => (
+-                          <th key={n} className="px-5 py-4 text-center">
+-                            Session {n}
+-                          </th>
+-                        ))}
+-                        <th className="px-5 py-4 text-center">Overall</th>
+-                      </tr>
+-                    </thead>
+-                    <tbody className="divide-y divide-slate-100">
+-                      {studentLines.map((s) => {
+-                        const overall = dayStatus(s.sessions, upTo);
+-                        return (
+-                          <tr
+-                            key={`${s.className}-${s.studentId}`}
+-                            className="hover:bg-slate-50"
+-                          >
+-                            <td className="px-5 py-4 text-slate-500">{s.studentId}</td>
+-                            <td className="px-5 py-4 font-medium text-slate-900">
+-                              {s.name}
+-                            </td>
+-                            <td className="px-5 py-4 text-slate-600">{s.className}</td>
+-                            {visibleSessions.map((n) => {
+-                              const status = s.sessions[n];
+-                              return (
+-                                <td key={n} className="px-5 py-4 text-center">
+-                                  {status ? (
+-                                    <span
+-                                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge[status]}`}
+-                                    >
+-                                      {status}
+-                                    </span>
+-                                  ) : (
+-                                    <span className="text-slate-300">—</span>
+-                                  )}
+-                                </td>
+-                              );
+-                            })}
+-                            <td className="px-5 py-4 text-center">
+-                              {overall ? (
+-                                <span
+-                                  className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge[overall]}`}
+-                                >
+-                                  {overall}
+-                                </span>
+-                              ) : (
+-                                <span className="text-slate-300">—</span>
+-                              )}
+-                            </td>
+-                          </tr>
+-                        );
+-                      })}
+-                    </tbody>
+-                  </table>
+-                </div>
+-              </div>
+-            </>
+-          )}
+-        </div>
+-      </main>
+-      <footer className="bg-[#0b0b1e] text-white">
+-          <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
+-            <div>
+-              <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
+-              <div className="grid grid-cols-2 gap-y-3 text-slate-400">
+-                <a href="https://www.stemegypt.net/" target="_blank" rel="noopener noreferrer">
+-                  School Website
+-                </a>
+-                <a href="https://web.facebook.com/STEM6october/?_rdc=1&_rdr#" target="_blank" rel="noopener noreferrer">
+-                  Facebook
+-                </a>
+-                <p>Contact Us</p>
+-                <p></p>
+-                <a href="mailto:counselor@stemegypt.edu.eg" target="_blank" rel="noopener noreferrer">
+-                  Email
+-                </a>
+-                <a href="https://wa.me/+201159114973" target="_blank" rel="noopener noreferrer">
+-                  Phone
+-                </a>
+-                <a href="../classes">
+-                  classes
+-                </a>
+-              </div>
+-            </div>
+-            <div>
+-              <h3 className="mb-6 text-2xl font-bold">About Us</h3>
+-              <div className="flex gap-4">
+-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg  text-[10px] uppercase text-white/50">
+-                  <img
+-                    src={stemIcon}
+-                    className="mx-auto"
+-                    alt="logo"
+-                  />
+-                </div>
+-                <div>
+-                  <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
+-                  <p className="mt-2 text-slate-400">
+-                    A public high school that provides top-notch education for
+-                    academically-motivated students.
+-                  </p>
+-                  <p className="mt-4 text-slate-400">Cosmic Village, 6th October, Egypt</p>
+-                </div>
+-              </div>
+-            </div>
+-          </div>
+-          <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
+-            <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
+-              <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
+-              <p>
+-                Managed by{<a href="https://github.com/ahmed-3sker" target="_blank"> 3sker</a>} &nbsp; {<a href="https://github.com/hazorox" target="_blank">hazoro</a>}
+-              </p>
++                </tbody>
++              </table>
+             </div>
+           </div>
+-        </footer>
+-    </div>
++        </>
++      )}
++    </Layout>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/pages/student_dashboard.tsx b/frontend/src/pages/student_dashboard.tsx
+index aff6863..afe8af4 100644
+--- a/frontend/src/pages/student_dashboard.tsx
++++ b/frontend/src/pages/student_dashboard.tsx
+@@ -1,409 +1,171 @@
+-import { useNavigate } from "react-router-dom";
+-import stemIcon from "../assets/stem_icon.png";
+-
+-const SCHOOL_NAME = "STEM 6th of October";
+-const SCHOOL_TAGLINE = "STEM High School for Boys 6th of October";
+-
+-type Status = "Present" | "Absent" | "Excused";
+-const student = {
+-  studentId: "S02",
+-  name: "Student 02",
+-  className: "10A",
+-};
+-const fakeDays: { date: string; sessions: string }[] = [
+-  { date: "2026-10-01", sessions: "PPPPP" },
+-  { date: "2026-10-04", sessions: "PPPPP" },
+-  { date: "2026-10-05", sessions: "PPAAA" },
+-  { date: "2026-10-06", sessions: "PPPPP" },
+-  { date: "2026-10-07", sessions: "EEEEE" },
+-  { date: "2026-10-08", sessions: "PPPPP" },
+-  { date: "2026-10-11", sessions: "PPPPP" },
+-  { date: "2026-10-12", sessions: "AAAAA" },
+-  { date: "2026-10-13", sessions: "PPPPP" },
+-  { date: "2026-10-14", sessions: "PPPEE" },
+-  { date: "2026-10-15", sessions: "PPPPP" },
+-  { date: "2026-10-18", sessions: "PPPPP" },
+-  { date: "2026-10-19", sessions: "PPPPP" },
+-  { date: "2026-10-20", sessions: "PAAAA" },
+-  { date: "2026-10-21", sessions: "PPPPP" },
+-  { date: "2026-10-22", sessions: "PPPPP" },
+-  { date: "2026-10-25", sessions: "EEEEE" },
+-  { date: "2026-10-26", sessions: "PPPPP" },
+-  { date: "2026-10-27", sessions: "AAAAA" },
+-  { date: "2026-10-28", sessions: "PPPPP" },
+-  { date: "2026-10-29", sessions: "PPPPP" },
+-];
+-
+-
+-const LETTER: Record<string, Status> = {
+-  P: "Present",
+-  A: "Absent",
+-  E: "Excused",
+-};
+-
+-const STATUSES: Status[] = ["Present", "Absent", "Excused"];
+-const SESSION_NUMBERS = [1, 2, 3, 4, 5];
+-
+-const statusBadge: Record<Status, string> = {
+-  Present: "bg-green-100 text-green-800",
+-  Absent: "bg-red-100 text-red-800",
+-  Excused: "bg-blue-100 text-blue-800",
+-};
+-
+-const statusDot: Record<Status, string> = {
+-  Present: "bg-green-500",
+-  Absent: "bg-red-500",
+-  Excused: "bg-blue-500",
+-};
+-
+-function dayStatus(sessions: Status[]): Status {
+-  if (sessions.includes("Absent")) return "Absent";
+-  if (sessions.includes("Excused")) return "Excused";
+-  return "Present";
+-}
+-
+-function percent(part: number, total: number) {
+-  return total === 0 ? "—" : `${Math.round((part / total) * 100)}%`;
+-}
+-
+-const days = fakeDays.map((d) => {
+-  const sessions = d.sessions.split("").map((l) => LETTER[l]);
+-  return { date: d.date, sessions, overall: dayStatus(sessions) };
+-});
++import { Link, useParams } from "react-router-dom";
++import { getStudent, getStudentHistory } from "../api/endpoints";
++import type { Status } from "../api/types";
++import Layout from "../components/Layout";
++import { LABEL, SESSIONS, STATUSES, badge, dayStatus, dot, percent } from "../lib/attendance";
++import { useFetch } from "../lib/use_fetch";
+ 
+ export default function StudentDashboard() {
+-  const navigate = useNavigate();
++  const { id = "" } = useParams();
++  const student = useFetch(id, () => getStudent(id));
++  const history = useFetch(id, () => getStudentHistory(id));
+ 
+-  const presentDays = days.filter((d) => d.overall === "Present").length;
+-  const absentDays = days.filter((d) => d.overall === "Absent").length;
+-  const excusedDays = days.filter((d) => d.overall === "Excused").length;
+-  const totalAbsentDays = absentDays + excusedDays; // Absent + Excused
++  const days = (history.data ?? []).map((d) => {
++    const sessions = SESSIONS.map((n) => d.sessions[n] as Status | undefined);
++    return { date: d.date, sessions, overall: dayStatus(sessions.filter(Boolean) as Status[]) ?? "present" };
++  });
+ 
+-  const sessionCounts: Record<Status, number> = {
+-    Present: 0,
+-    Absent: 0,
+-    Excused: 0,
+-  };
+-  days.forEach((d) =>
+-    d.sessions.forEach((s) => {
+-      sessionCounts[s] += 1;
+-    })
+-  );
+-  const totalSessions =
+-    sessionCounts.Present + sessionCounts.Absent + sessionCounts.Excused;
++  const dayCount = (s: Status) => days.filter((d) => d.overall === s).length;
++  const presentDays = dayCount("present");
++  const excusedDays = dayCount("excused");
++  const totalAbsentDays = dayCount("absent") + excusedDays;
+ 
+-  const recent = [...days].reverse(); 
++  const sessionCounts: Record<Status, number> = { present: 0, absent: 0, excused: 0 };
++  days.forEach((d) => d.sessions.forEach((s) => s && (sessionCounts[s] += 1)));
++  const totalSessions = sessionCounts.present + sessionCounts.absent + sessionCounts.excused;
++  const recent = [...days].reverse();
+ 
+-  return (
+-    <div className="flex min-h-screen flex-col bg-slate-100">
+-      <header className="bg-[#1a1a4e] shadow-lg">
+-        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+-          <div className="flex items-center gap-3">
+-            <div className="flex h-14 w-14 items-center justify-center rounded-lg font-bold uppercase tracking-wider text-white/60">
+-              <img src={stemIcon} className="mx-auto" alt="logo" />
+-            </div>
+-            <div className="leading-tight">
+-              <p className="text-xl font-extrabold tracking-wide text-white sm:text-2xl">
+-                {SCHOOL_NAME}
+-              </p>
+-              <p className="text-xs text-white/80">{SCHOOL_TAGLINE}</p>
+-            </div>
+-          </div>
++  const className =
++    typeof student.data?.class === "object" ? student.data.class.name : "";
+ 
+-          <p className="hidden text-sm font-bold uppercase tracking-wider text-white sm:block">
+-            Attendance Management System
+-          </p>
+-        </nav>
+-      </header>
++  return (
++    <Layout>
++      <Link to="/students" className="mb-6 inline-block font-semibold text-[#1a1a4e] hover:underline">← Back</Link>
+ 
+-      <main className="flex-1 p-4 sm:p-8">
+-        <div className="mx-auto max-w-7xl">
+-          <button
+-            onClick={() => navigate(-1)}
+-            className="mb-6 font-semibold text-[#1a1a4e] hover:underline"
+-          >
+-            ← Back
+-          </button>
++      {(student.error || history.error) && (
++        <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-red-600">{student.error ?? history.error}</p>
++      )}
++      {(student.loading || history.loading) && <p className="text-slate-500">Loading...</p>}
+ 
+-       
++      {student.data && (
++        <>
+           <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:flex-row sm:items-center">
+             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-[#1a1a4e] text-2xl font-bold text-white">
+-              {student.name.charAt(0)}
++              {student.data.name.charAt(0)}
+             </div>
+-
+             <div className="flex-1">
+-              <p className="text-sm font-semibold uppercase tracking-widest text-[#1a1a4e]">
+-                Student Dashboard
+-              </p>
+-              <h1 className="mt-1 text-3xl font-bold text-slate-900">
+-                {student.name}
+-              </h1>
+-              <p className="mt-1 text-slate-500">
+-                {student.studentId} · Class {student.className}
+-              </p>
++              <p className="text-sm font-semibold uppercase tracking-widest text-[#1a1a4e]">Student Dashboard</p>
++              <h1 className="mt-1 text-3xl font-bold text-slate-900">{student.data.name}</h1>
++              <p className="mt-1 text-slate-500">{student.data.studentId} · Class {className}</p>
+             </div>
+-
+             <div className="rounded-xl bg-[#1a1a4e] px-6 py-4 text-white">
+               <p className="text-sm text-white/80">Present Rate</p>
+-              <p className="text-3xl font-bold">
+-                {percent(presentDays, days.length)}
+-              </p>
++              <p className="text-3xl font-bold">{percent(presentDays, days.length)}</p>
+             </div>
+           </div>
+ 
+-    
+-          <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+-            <div className="rounded-xl bg-green-50 p-4 text-green-700">
+-              <p className="text-sm font-medium">Days Present</p>
+-              <p className="mt-1 text-2xl font-bold">{presentDays}</p>
+-              <p className="text-xs opacity-80">
+-                {percent(presentDays, days.length)} of days
+-              </p>
+-            </div>
+-
+-            <div className="rounded-xl bg-red-50 p-4 text-red-700">
+-              <p className="text-sm font-medium">Total Absent Days</p>
+-              <p className="mt-1 text-2xl font-bold">{totalAbsentDays}</p>
+-              <p className="text-xs opacity-80">Absent + Excused</p>
+-            </div>
+-
+-            <div className="rounded-xl bg-blue-50 p-4 text-blue-700">
+-              <p className="text-sm font-medium">Excused Days</p>
+-              <p className="mt-1 text-2xl font-bold">{excusedDays}</p>
+-              <p className="text-xs opacity-80">
+-                {percent(excusedDays, days.length)} of days
+-              </p>
+-            </div>
+-
+-            <div className="rounded-xl bg-[#1a1a4e] p-4 text-white">
+-              <p className="text-sm font-medium text-white/80">Days Recorded</p>
+-              <p className="mt-1 text-2xl font-bold">{days.length}</p>
+-              <p className="text-xs text-white/70">{totalSessions} sessions</p>
+-            </div>
+-          </div>
+-
+-    
+-          <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+-              <h2 className="text-xl font-bold text-slate-900">Day by Day</h2>
+-              <p className="mt-1 text-sm text-slate-500">
+-                Each square is one school day. Hover to see the date.
+-              </p>
+-
+-              <div className="mt-4 flex flex-wrap gap-2">
+-                {days.map((d) => (
+-                  <div
+-                    key={d.date}
+-                    title={`${d.date}: ${d.overall}`}
+-                    className={`h-9 w-9 rounded-lg ${statusDot[d.overall]}`}
+-                  />
+-                ))}
+-              </div>
+-
+-              <div className="mt-4 flex flex-wrap gap-4 text-sm text-slate-600">
+-                {STATUSES.map((s) => (
+-                  <span key={s} className="flex items-center gap-2">
+-                    <span className={`h-3 w-3 rounded ${statusDot[s]}`} />
+-                    {s}
+-                  </span>
+-                ))}
+-              </div>
+-            </div>
+-
+-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+-              <h2 className="text-xl font-bold text-slate-900">
+-                Session Breakdown
+-              </h2>
+-              <p className="mt-1 text-sm text-slate-500">
+-                {totalSessions} sessions recorded in total.
+-              </p>
+-
+-              <div className="mt-4 space-y-3">
+-                {STATUSES.map((s) => {
+-                  const count = sessionCounts[s];
+-                  const width =
+-                    totalSessions === 0
+-                      ? 0
+-                      : Math.round((count / totalSessions) * 100);
+-                  return (
+-                    <div key={s}>
+-                      <div className="mb-1 flex justify-between text-sm">
+-                        <span className="font-medium text-slate-700">{s}</span>
+-                        <span className="text-slate-500">
+-                          {count} · {percent(count, totalSessions)}
+-                        </span>
+-                      </div>
+-                      <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+-                        <div
+-                          className={`h-full rounded-full ${statusDot[s]}`}
+-                          style={{ width: `${width}%` }}
+-                        />
+-                      </div>
+-                    </div>
+-                  );
+-                })}
++          {days.length === 0 && !history.loading && (
++            <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
++              No attendance recorded for this student yet.
++            </p>
++          )}
++
++          {days.length > 0 && (
++            <>
++              <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
++                <div className="rounded-xl bg-green-50 p-4 text-green-700">
++                  <p className="text-sm font-medium">Days Present</p>
++                  <p className="mt-1 text-2xl font-bold">{presentDays}</p>
++                  <p className="text-xs opacity-80">{percent(presentDays, days.length)} of days</p>
++                </div>
++                <div className="rounded-xl bg-red-50 p-4 text-red-700">
++                  <p className="text-sm font-medium">Total Absent Days</p>
++                  <p className="mt-1 text-2xl font-bold">{totalAbsentDays}</p>
++                  <p className="text-xs opacity-80">Absent + Excused</p>
++                </div>
++                <div className="rounded-xl bg-blue-50 p-4 text-blue-700">
++                  <p className="text-sm font-medium">Excused Days</p>
++                  <p className="mt-1 text-2xl font-bold">{excusedDays}</p>
++                  <p className="text-xs opacity-80">{percent(excusedDays, days.length)} of days</p>
++                </div>
++                <div className="rounded-xl bg-[#1a1a4e] p-4 text-white">
++                  <p className="text-sm font-medium text-white/80">Days Recorded</p>
++                  <p className="mt-1 text-2xl font-bold">{days.length}</p>
++                  <p className="text-xs text-white/70">{totalSessions} sessions</p>
++                </div>
+               </div>
+-            </div>
+-          </div>
+-
+- 
+-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+-            <div className="border-b border-slate-200 p-5">
+-              <h2 className="text-xl font-bold text-slate-900">
+-                Attendance History
+-              </h2>
+-              <p className="mt-1 text-sm text-slate-500">Newest first.</p>
+-            </div>
+ 
+-            
+-            <div className="divide-y divide-slate-100 md:hidden">
+-              {recent.map((d) => (
+-                <div key={d.date} className="p-4">
+-                  <div className="mb-3 flex items-center justify-between">
+-                    <p className="font-medium text-slate-900">{d.date}</p>
+-                    <span
+-                      className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge[d.overall]}`}
+-                    >
+-                      {d.overall}
+-                    </span>
++              <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
++                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++                  <h2 className="text-xl font-bold text-slate-900">Day by Day</h2>
++                  <p className="mt-1 text-sm text-slate-500">Each square is one school day. Hover to see the date.</p>
++                  <div className="mt-4 flex flex-wrap gap-2">
++                    {days.map((d) => (
++                      <div key={d.date} title={`${d.date}: ${LABEL[d.overall]}`} className={`h-9 w-9 rounded-lg ${dot[d.overall]}`} />
++                    ))}
+                   </div>
+-                  <div className="flex flex-wrap gap-2">
+-                    {d.sessions.map((status, i) => (
+-                      <span
+-                        key={i}
+-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge[status]}`}
+-                      >
+-                        S{i + 1}: {status}
++                  <div className="mt-4 flex flex-wrap gap-4 text-sm text-slate-600">
++                    {STATUSES.map((s) => (
++                      <span key={s} className="flex items-center gap-2">
++                        <span className={`h-3 w-3 rounded ${dot[s]}`} />
++                        {LABEL[s]}
+                       </span>
+                     ))}
+                   </div>
+                 </div>
+-              ))}
+-            </div>
+ 
+-           
+-            <div className="hidden overflow-x-auto md:block">
+-              <table className="w-full text-left">
+-                <thead className="bg-slate-50 text-sm text-slate-600">
+-                  <tr>
+-                    <th className="px-5 py-4">Date</th>
+-                    {SESSION_NUMBERS.map((n) => (
+-                      <th key={n} className="px-5 py-4 text-center">
+-                        Session {n}
+-                      </th>
++                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
++                  <h2 className="text-xl font-bold text-slate-900">Session Breakdown</h2>
++                  <p className="mt-1 text-sm text-slate-500">{totalSessions} sessions recorded in total.</p>
++                  <div className="mt-4 space-y-3">
++                    {STATUSES.map((s) => (
++                      <div key={s}>
++                        <div className="mb-1 flex justify-between text-sm">
++                          <span className="font-medium text-slate-700">{LABEL[s]}</span>
++                          <span className="text-slate-500">{sessionCounts[s]} · {percent(sessionCounts[s], totalSessions)}</span>
++                        </div>
++                        <div className="h-3 overflow-hidden rounded-full bg-slate-100">
++                          <div
++                            className={`h-full rounded-full ${dot[s]}`}
++                            style={{ width: `${totalSessions ? Math.round((sessionCounts[s] / totalSessions) * 100) : 0}%` }}
++                          />
++                        </div>
++                      </div>
+                     ))}
+-                    <th className="px-5 py-4 text-center">Overall</th>
+-                  </tr>
+-                </thead>
+-                <tbody className="divide-y divide-slate-100">
+-                  {recent.map((d) => (
+-                    <tr key={d.date} className="hover:bg-slate-50">
+-                      <td className="px-5 py-4 font-medium text-slate-900">
+-                        {d.date}
+-                      </td>
+-                      {d.sessions.map((status, i) => (
+-                        <td key={i} className="px-5 py-4 text-center">
+-                          <span
+-                            className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge[status]}`}
+-                          >
+-                            {status}
+-                          </span>
+-                        </td>
+-                      ))}
+-                      <td className="px-5 py-4 text-center">
+-                        <span
+-                          className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge[d.overall]}`}
+-                        >
+-                          {d.overall}
+-                        </span>
+-                      </td>
+-                    </tr>
+-                  ))}
+-                </tbody>
+-              </table>
+-            </div>
+-          </div>
+-        </div>
+-      </main>
+-
+-
+-      <footer className="bg-[#0b0b1e] text-white">
+-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_1.8fr]">
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">Site Map</h3>
+-            <div className="grid grid-cols-2 gap-y-3 text-slate-400">
+-              <a
+-                href="https://www.stemegypt.net/"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                School Website
+-              </a>
+-              <a
+-                href="https://www.facebook.com/STEM6october/"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                Facebook
+-              </a>
+-              <p className="col-span-2 mt-2 font-semibold text-white">
+-                Contact Us
+-              </p>
+-              <a href="mailto:counselor@stemegypt.edu.eg">Email</a>
+-              <a
+-                href="https://wa.me/201159114973"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                WhatsApp
+-              </a>
+-            </div>
+-          </div>
+-
+-          <div>
+-            <h3 className="mb-6 text-2xl font-bold">About Us</h3>
+-            <div className="flex gap-4">
+-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg">
+-                <img src={stemIcon} className="mx-auto" alt="logo" />
+-              </div>
+-              <div>
+-                <h4 className="text-lg font-bold">{SCHOOL_NAME}</h4>
+-                <p className="mt-2 text-slate-400">
+-                  A public high school that provides top-notch education for
+-                  academically-motivated students.
+-                </p>
+-                <p className="mt-4 text-slate-400">
+-                  Cosmic Village, 6th October, Egypt
+-                </p>
++                  </div>
++                </div>
+               </div>
+-            </div>
+-          </div>
+-        </div>
+ 
+-        <div className="mx-auto max-w-6xl border-t border-white/10 px-4 py-5 sm:px-6">
+-          <div className="flex flex-col items-center justify-between gap-2 text-sm font-semibold sm:flex-row">
+-            <p>Copyright © {new Date().getFullYear()} All Rights Reserved</p>
+-            <p>
+-              Managed by{" "}
+-              <a
+-                href="https://github.com/ahmed-3sker"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                3sker
+-              </a>{" "}
+-              &nbsp;
+-              <a
+-                href="https://github.com/hazorox"
+-                target="_blank"
+-                rel="noopener noreferrer"
+-              >
+-                hazoro
+-              </a>
+-            </p>
+-          </div>
+-        </div>
+-      </footer>
+-    </div>
++              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
++                <div className="border-b border-slate-200 p-5">
++                  <h2 className="text-xl font-bold text-slate-900">Attendance History</h2>
++                  <p className="mt-1 text-sm text-slate-500">Newest first.</p>
++                </div>
++                <div className="overflow-x-auto">
++                  <table className="w-full text-left">
++                    <thead className="bg-slate-50 text-sm text-slate-600">
++                      <tr>
++                        <th className="px-5 py-4">Date</th>
++                        {SESSIONS.map((n) => <th key={n} className="px-5 py-4 text-center">S{n}</th>)}
++                        <th className="px-5 py-4 text-center">Overall</th>
++                      </tr>
++                    </thead>
++                    <tbody className="divide-y divide-slate-100">
++                      {recent.map((d) => (
++                        <tr key={d.date} className="hover:bg-slate-50">
++                          <td className="px-5 py-4 font-medium text-slate-900">{d.date}</td>
++                          {d.sessions.map((s, i) => (
++                            <td key={i} className="px-5 py-4 text-center">
++                              {s ? (
++                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge[s]}`}>{LABEL[s]}</span>
++                              ) : (
++                                <span className="text-slate-300">-</span>
++                              )}
++                            </td>
++                          ))}
++                          <td className="px-5 py-4 text-center">
++                            <span className={`rounded-full px-3 py-1 text-xs font-bold ${badge[d.overall]}`}>{LABEL[d.overall]}</span>
++                          </td>
++                        </tr>
++                      ))}
++                    </tbody>
++                  </table>
++                </div>
++              </div>
++            </>
++          )}
++        </>
++      )}
++    </Layout>
+   );
+-}
+\ No newline at end of file
++}
+-- 
+2.43.0
+
