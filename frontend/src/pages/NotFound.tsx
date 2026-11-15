@@ -1,14 +1,16 @@
-import React from 'react'
-import { useNavigate } from "react-router-dom";
-import stemIcon from "../assets/stem_icon.png";
+import { Link } from "react-router-dom";
+import Layout from "../components/Layout";
 
-
-const NotFound = () => {
-  const navigate = useNavigate();
-
+export default function NotFound() {
   return (
-    <div>NotFound</div>
-  )
+    <Layout>
+      <div className="py-16 text-center">
+        <p className="text-6xl font-bold text-[#1a1a4e]">404</p>
+        <p className="mt-4 text-slate-600">That page doesn't exist.</p>
+        <Link to="/" className="mt-6 inline-block font-semibold text-blue-600 hover:text-blue-800">
+          Back to home
+        </Link>
+      </div>
+    </Layout>
+  );
 }
-
-export default NotFound

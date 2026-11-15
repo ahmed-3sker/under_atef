@@ -1,42 +1,29 @@
 import { Link } from "react-router-dom";
-import { useAuth, type Role } from "../components/auth_provider";
-import RoleBadge from "../components/RoleBadge";
-
-const links: { to: string; label: string; roles: Role[] }[] = [
-  { to: "/dashboard",  label: "Dashboard",  roles: ["admin", "principal"] },
-  { to: "/attendance", label: "Attendance", roles: ["teacher"] },
-  { to: "/student_dashboard",   label: "Students",   roles: ["admin", "teacher", "principal"] },
-  { to: "/excuses",    label: "Excuses",    roles: ["admin", "teacher"] },
-  { to: "/reports",    label: "Reports",    roles: ["admin", "principal"] },
-  { to: "/classes",    label: "Classes",    roles: ["admin"] },
-  { to: "/users",      label: "Users",      roles: ["admin"] },
-   { to: "/attendance",      label: "Attendance",      roles: ["admin"] }
-  
-];
+import { useAuth } from "../components/auth_provider";
+import Layout from "../components/Layout";
+import { LINKS } from "../lib/nav";
 
 export default function Home() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   if (!user) return null; // ProtectedRoute already guarantees a user
+  const links = LINKS.filter((l) => l.roles.includes(user.role));
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1>
-        Welcome, {user.name} <RoleBadge />
-      </h1>
-
-      {user.role === "admin" && <p>You have full admin access.</p>}
-
-      <nav style={{ display: "grid", gap: 8, maxWidth: 240, margin: "16px 0" }}>
-        {links
-          .filter((l) => l.roles.includes(user.role))
-          .map((l) => (
-            <Link key={l.to} to={l.to}>
-              {l.label}
-            </Link>
-          ))}
-      </nav>
-
-      <button onClick={logout}>Log out</button>
-    </div>
+    <Layout>
+      <h1 className="text-3xl font-bold text-slate-900">Welcome, {user.name}</h1>
+      <p className="mb-8 mt-2 text-slate-600">What would you like to do?</p>
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {links.map((l) => (
+          <Link
+            key={l.to}
+            to={l.to}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:border-[#1a1a4e] hover:shadow-lg"
+          >
+            <h2 className="text-lg font-semibold text-slate-900">{l.label}</h2>
+            <p className="mt-1 text-sm text-slate-500">{l.description}</p>
+          </Link>
+        ))}
+      </div>
+    </Layout>
   );
 }

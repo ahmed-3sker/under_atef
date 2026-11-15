@@ -5,12 +5,12 @@ import { authenticate, authorize } from "../middleware/auth";
 import { validId, wrap } from "../utils/tools";
 
 const router = Router();
-const ROLES = ["admin", "staff", "teacher"];
+const ROLES = ["admin", "principal", "teacher"];
 
 router.use(authenticate, authorize("admin"));
 
 router.get("/", wrap(async (req, res) => {
-  const filter = req.query.role ? { role: req.query.role } : {};
+  const filter: Record<string, unknown> = req.query.role ? { role: String(req.query.role) } : {};
   res.json({ users: await User.find(filter).sort("name") });
 }));
 

@@ -11,58 +11,42 @@ import Dashboard from "./pages/dashboard";
 import Reports from "./pages/reports";
 import ClassesList from "./pages/Class_list";
 import Attendance from "./pages/Attendance";
-import StudentDashBorad from "./pages/student_dashboard";
-
-
+import Students from "./pages/Students";
+import StudentDashboard from "./pages/student_dashboard";
+import Users from "./pages/Users";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          <Route path="/login" element={<Login />} />
 
-            {/* <Route element={<ProtectedRoute roles=["idk"] />} /> */}
+          {/* any logged-in user */}
+          <Route element={<ProtectedRoute />}>
+            <Route path="/" element={<Home />} />
+            <Route path="/students" element={<Students />} />
+            <Route path="/students/:id" element={<StudentDashboard />} />
+
+            {/* teachers + admins take attendance */}
+            <Route element={<ProtectedRoute roles={["teacher", "admin"]} />}>
               <Route path="/attendance" element={<ClassesList />} />
               <Route path="/attendance/:classId" element={<Attendance />} />
-            {/* </Route> */}
-          <Route path="/Login" element={<Login />} />
+            </Route>
 
-          {/* Any Logged in batatis */}
-
-          <Route element={<ProtectedRoute />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/Classes" element={<ClassesList />} />
-            
-
-            {/* Atef & Admins */}
-
-
+            {/* principal + admins read reports */}
             <Route element={<ProtectedRoute roles={["principal", "admin"]} />}>
-              <Route path="/student_dashboard" element={<StudentDashBorad />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/reports" element={<Reports />} />
             </Route>
 
-            {/* Teachers */}
-
-            {/* teachers and admins */}
-
-
-            {/* all (bonus if we finished the web before the deadline)*/}
-
-            {/* <Route path="/students" element={<Students />} />
-            <Route path="/students/:id" element={<StudentProfile />} /> */}
-
-            {/* hazoro & asker only */}
-            
-            {/* we will start on it when remeber the use of it  */}
-
-            {/* <Route element={<ProtectedRoute roles={["admin"]} />}>
+            {/* admins only */}
+            <Route element={<ProtectedRoute roles={["admin"]} />}>
               <Route path="/users" element={<Users />} />
-            </Route> */}
-
-
+            </Route>
           </Route>
 
+          <Route path="/classes" element={<Navigate to="/attendance" replace />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

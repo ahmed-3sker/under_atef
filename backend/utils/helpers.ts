@@ -1,13 +1,15 @@
 import type { RequestHandler } from "express";
 import mongoose from "mongoose";
-// import Class from "../models/class"
 
-export const wrap = (func:RequestHandler):RequestHandler => (req,res,next)=>{
-    Promise.resolve(func(req,res,next)).catch(next)
-}
+export const wrap =
+  (func: RequestHandler): RequestHandler =>
+  (req, res, next) => {
+    Promise.resolve(func(req, res, next)).catch(next);
+  };
 
-export const today = ()=>
-    new Date().toLocaleDateString("en-GB",{timeZone:"Africa/Cairo"}).replace("/","-")
+// YYYY-MM-DD in Cairo time (en-CA formats dates exactly like that)
+export const today = () =>
+  new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
 
 export const isValidDate = (d: unknown): d is string =>
   typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d));
