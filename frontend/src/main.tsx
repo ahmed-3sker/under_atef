@@ -11,6 +11,7 @@ import Dashboard from "./pages/dashboard";
 import Reports from "./pages/reports";
 import ClassesList from "./pages/Class_list";
 import Attendance from "./pages/Attendance";
+import StudentDashBorad from "./pages/student_dashboard";
 
 
 
@@ -37,7 +38,7 @@ createRoot(document.getElementById("root")!).render(
 
 
             <Route element={<ProtectedRoute roles={["principal", "admin"]} />}>
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/student_dashboard" element={<StudentDashBorad />} />
               <Route path="/reports" element={<Reports />} />
             </Route>
 

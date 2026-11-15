@@ -5,7 +5,7 @@ import RoleBadge from "../components/RoleBadge";
 const links: { to: string; label: string; roles: Role[] }[] = [
   { to: "/dashboard",  label: "Dashboard",  roles: ["admin", "principal"] },
   { to: "/attendance", label: "Attendance", roles: ["teacher"] },
-  { to: "/students",   label: "Students",   roles: ["admin", "teacher", "principal"] },
+  { to: "/student_dashboard",   label: "Students",   roles: ["admin", "teacher", "principal"] },
   { to: "/excuses",    label: "Excuses",    roles: ["admin", "teacher"] },
   { to: "/reports",    label: "Reports",    roles: ["admin", "principal"] },
   { to: "/classes",    label: "Classes",    roles: ["admin"] },
