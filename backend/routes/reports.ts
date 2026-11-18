@@ -8,7 +8,6 @@ import { isValidDate, validId, wrap } from "../utils/helpers";
 const router = Router();
 router.use(authenticate);
 
-// Teachers and admins submit. Re-submitting the same class/date/session overwrites it.
 router.post("/", authorize("teacher", "admin"), wrap(async (req, res) => {
   const { classId, date, session, records } = req.body ?? {};
   const report = await submitReport({
@@ -17,7 +16,6 @@ router.post("/", authorize("teacher", "admin"), wrap(async (req, res) => {
   res.status(201).json({ report });
 }));
 
-// One class / date / session. Used by the attendance page to load what's already saved.
 router.get("/class/:id", validId, wrap(async (req, res) => {
   const { date } = req.query;
   const session = Number(req.query.session);
@@ -29,7 +27,6 @@ router.get("/class/:id", validId, wrap(async (req, res) => {
   res.json({ report }); // null when nothing is saved yet
 }));
 
-// Everything for one day (all classes, all sessions). Principal + admin only.
 router.get("/", authorize("principal", "admin"), wrap(async (req, res) => {
   const { date } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ message: "date must be YYYY-MM-DD" });
@@ -37,13 +34,11 @@ router.get("/", authorize("principal", "admin"), wrap(async (req, res) => {
   res.json({ reports });
 }));
 
-// Dates that have at least one report, newest first (fills the date dropdown).
 router.get("/dates", authorize("principal", "admin"), wrap(async (_req, res) => {
   const dates = await Report.distinct("date");
   res.json({ dates: dates.sort().reverse() });
 }));
 
-// One student's history, grouped by day.
 router.get("/student/:id", validId, wrap(async (req, res) => {
   const studentId = new mongoose.Types.ObjectId(String(req.params.id));
   const rows = await Report.find({ "records.student": studentId }, { date: 1, session: 1, records: 1 })

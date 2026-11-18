@@ -7,7 +7,6 @@ import { pick, validId, wrap } from "../utils/helpers";
 const router = Router();
 router.use(authenticate);
 
-// any logged-in user can read (teachers need the roster to take attendance)
 router.get("/", wrap(async (req, res) => {
   const filter: Record<string, unknown> = { isActive: true };
   if (req.query.class) filter.class = req.query.class;

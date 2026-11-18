@@ -7,7 +7,6 @@ export const wrap =
     Promise.resolve(func(req, res, next)).catch(next);
   };
 
-// YYYY-MM-DD in Cairo time (en-CA formats dates exactly like that)
 export const today = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
 

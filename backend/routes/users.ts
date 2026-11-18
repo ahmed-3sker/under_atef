@@ -36,7 +36,6 @@ router.patch("/:id", validId, wrap(async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  // stop an admin locking themselves out
   if (user.id === req.user!.id && (isActive === false || (role && role !== "admin"))) {
     return res.status(400).json({ message: "You can't deactivate or demote yourself" });
   }
@@ -60,7 +59,6 @@ router.patch("/:id", validId, wrap(async (req, res) => {
   res.json({ user });
 }));
 
-// "delete" = deactivate, so old records still point to a real user
 router.delete("/:id", validId, wrap(async (req, res) => {
   if (req.params.id === req.user!.id) {
     return res.status(400).json({ message: "You can't deactivate yourself" });

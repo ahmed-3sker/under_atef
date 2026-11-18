@@ -20,7 +20,6 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     }
     const payload = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET!) as { id: string };
 
-    // re-check the DB so deactivated users lose access immediately
     const user = await User.findById(payload.id);
     if (!user || !user.isActive) {
       return res.status(401).json({ message: "Account not found or disabled" });

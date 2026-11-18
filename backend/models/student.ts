@@ -1,7 +1,5 @@
 import { Schema, model, type InferSchemaType } from "mongoose";
 
-// Attendance is NOT stored here. Reports are the single source of truth,
-// and a student's history is read from them.
 const studentSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
