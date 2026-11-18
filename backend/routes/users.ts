@@ -2,7 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import User from "../models/user";
 import { authenticate, authorize } from "../middleware/auth";
-import { validId, wrap } from "../utils/tools";
+import { validId, wrap } from "../utils/helpers";
 
 const router = Router();
 const ROLES = ["admin", "principal", "teacher"];
@@ -65,7 +65,7 @@ router.delete("/:id", validId, wrap(async (req, res) => {
   if (req.params.id === req.user!.id) {
     return res.status(400).json({ message: "You can't deactivate yourself" });
   }
-  const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: "after" });
   if (!user) return res.status(404).json({ message: "User not found" });
   res.json({ user });
 }));
