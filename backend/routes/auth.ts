@@ -1,11 +1,21 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/user";
+import rateLimit from "express-rate-limit";
 import { authenticate } from "../middleware/auth";
 
 const router = Router();
 
-router.post("/login", async (req, res) => {
+// 10 login attempts per 15 minutes per IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many login attempts. Try again in 15 minutes." },
+});
+
+router.post("/login", loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body ?? {};
     if (!email || !password) {
